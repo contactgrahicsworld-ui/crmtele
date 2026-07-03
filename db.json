@@ -1,0 +1,92 @@
+{
+  "users": [
+    {
+      "id": "u-admin",
+      "name": "Admin",
+      "email": "contact.grahicsworld@gmail.com",
+      "password": "admin",
+      "role": "admin",
+      "salaryBase": 18000,
+      "commissionRate": 150,
+      "status": "active"
+    },
+    {
+      "id": "u-1783068247412",
+      "name": "manish",
+      "email": "vedpackagingindustries@gmail.com",
+      "password": "1234",
+      "role": "telecaller",
+      "salaryBase": 12000,
+      "commissionRate": 100,
+      "status": "active"
+    },
+    {
+      "id": "u-1783068506836",
+      "name": "himanchal",
+      "email": "ipgroup2002@gmail.com",
+      "password": "1234",
+      "role": "admin",
+      "salaryBase": 18000,
+      "commissionRate": 150,
+      "status": "active"
+    },
+    {
+      "id": "u-1783075089530",
+      "name": "himanchal",
+      "email": "contact@gmail.com",
+      "password": "0000",
+      "role": "admin",
+      "salaryBase": 18000,
+      "commissionRate": 150,
+      "status": "active"
+    }
+  ],
+  "leads": [],
+  "callLogs": [
+    {
+      "id": "call-1783068310709",
+      "leadId": "lead-1783068287593",
+      "leadName": "wife",
+      "leadPhone": "8962636330",
+      "telecallerId": "u-1783068247412",
+      "telecallerName": "manish",
+      "status": "Interested",
+      "duration": 0,
+      "timestamp": "2026-07-03T08:45:10.709Z",
+      "notes": "",
+      "hasRecording": false
+    },
+    {
+      "id": "call-1783068435469",
+      "leadId": "lead-1783068287593",
+      "leadName": "wife",
+      "leadPhone": "8962636330",
+      "telecallerId": "u-1783068247412",
+      "telecallerName": "manish",
+      "status": "Interested",
+      "duration": 0,
+      "timestamp": "2026-07-03T08:47:15.469Z",
+      "notes": "",
+      "hasRecording": false
+    },
+    {
+      "id": "call-1783075394703",
+      "leadId": "lead-1783068287593",
+      "leadName": "wife",
+      "leadPhone": "8962636330",
+      "telecallerId": "u-1783068247412",
+      "telecallerName": "manish",
+      "status": "Interested",
+      "duration": 0,
+      "timestamp": "2026-07-03T10:43:14.703Z",
+      "notes": "",
+      "hasRecording": false
+    }
+  ],
+  "supportTickets": [],
+  "autoCallingConfig": {
+    "delaySeconds": 5,
+    "enabled": true
+  },
+  "backups": []
+}

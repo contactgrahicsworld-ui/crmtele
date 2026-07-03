@@ -1,0 +1,6 @@
+{
+  "name": "Tele-CRM",
+  "description": "Zero-Cost Operational CRM & Dialer Console with Lead Management, Call Recording, and Interactive Analytics.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
