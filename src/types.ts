@@ -2,9 +2,12 @@ export interface User {
   id: string;
   name: string;
   email: string;
-  role: 'admin' | 'telecaller';
+  phone?: string;
+  role: 'admin' | 'head' | 'staff' | 'telecaller';
+  department?: 'Tech' | 'NonTech' | 'Sales';
   salaryBase: number;
-  commissionRate: number; // commission per qualified lead
+  commissionRate: number; // commission per qualified lead or per task
+  monthlyTarget?: number;
   status: 'active' | 'suspended';
 }
 

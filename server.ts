@@ -42,18 +42,7 @@ if (process.env.GEMINI_API_KEY) {
 function readDB() {
   if (!fs.existsSync(DB_FILE)) {
     const initialData = {
-      users: [
-        {
-          id: "u-admin",
-          name: "Admin",
-          email: "contact.grahicsworld@gmail.com",
-          password: "admin",
-          role: "admin",
-          salaryBase: 18000,
-          commissionRate: 150,
-          status: "active"
-        }
-      ],
+      users: [],
       leads: [],
       callLogs: [],
       supportTickets: [],
@@ -86,54 +75,112 @@ function writeDB(data: any) {
 
 // Auth Routes
 app.post("/api/auth/register", (req, res) => {
-  const { name, email, password, role } = req.body;
-  if (!name || !email || !password || !role) {
+  const { name, email, password, role, phone, department } = req.body;
+  if (!name || !password || !role) {
     return res.status(400).json({ error: "All fields are required" });
   }
 
   const db = readDB();
-  const existing = db.users.find((u: any) => u.email.toLowerCase() === email.toLowerCase());
-  if (existing) {
-    return res.status(400).json({ error: "Email already registered" });
+  
+  // Check if name is already registered
+  const existingName = db.users.find((u: any) => u.name.trim().toLowerCase() === name.trim().toLowerCase());
+  if (existingName) {
+    // If the role is main_admin and we are replacing the existing u-admin, we can proceed
+    if (!(role === "main_admin" && existingName.id === "u-admin")) {
+      return res.status(400).json({ error: "Username already registered" });
+    }
+  }
+
+  if (email) {
+    const existingEmail = db.users.find((u: any) => u.email && u.email.toLowerCase() === email.toLowerCase());
+    if (existingEmail) {
+      if (!(role === "main_admin" && existingEmail.id === "u-admin")) {
+        return res.status(400).json({ error: "Email already registered" });
+      }
+    }
+  }
+
+  let userId = "u-" + Date.now();
+  let assignedRole = role;
+
+  if (role === "main_admin") {
+    userId = "u-admin";
+    assignedRole = "admin";
+    // Overwrite the existing u-admin
+    db.users = db.users.filter((u: any) => u.id !== "u-admin");
+  }
+
+  // Define salary base and commission rate based on role
+  let salaryBase = 12000;
+  let commissionRate = 100;
+  if (assignedRole === "admin") {
+    salaryBase = 18000;
+    commissionRate = 150;
+  } else if (assignedRole === "head") {
+    salaryBase = 15000;
+    commissionRate = 120;
   }
 
   const newUser = {
-    id: "u-" + Date.now(),
+    id: userId,
     name,
-    email,
+    email: email || "",
     password, // Storing simply for demonstration/testing CRM
-    role,
-    salaryBase: role === "admin" ? 18000 : 12000,
-    commissionRate: role === "admin" ? 150 : 100,
+    phone: phone || "",
+    role: assignedRole,
+    department: department || "Sales",
+    salaryBase,
+    commissionRate,
+    monthlyTarget: 5,
     status: "active"
   };
 
   db.users.push(newUser);
   writeDB(db);
 
-  res.json({ success: true, user: { id: newUser.id, name: newUser.name, email: newUser.email, role: newUser.role } });
+  res.json({ 
+    success: true, 
+    user: { 
+      id: newUser.id, 
+      name: newUser.name, 
+      email: newUser.email, 
+      phone: newUser.phone, 
+      role: newUser.role, 
+      department: newUser.department 
+    } 
+  });
 });
 
 app.post("/api/auth/login", (req, res) => {
-  const { email, password } = req.body;
-  if (!email || !password) {
-    return res.status(400).json({ error: "Email and password are required" });
+  const { name, password } = req.body;
+  if (!name || !password) {
+    return res.status(400).json({ error: "Name and password are required" });
   }
 
   const db = readDB();
   const user = db.users.find(
-    (u: any) => u.email.toLowerCase() === email.toLowerCase() && u.password === password
+    (u: any) => u.name.trim().toLowerCase() === name.trim().toLowerCase() && u.password === password
   );
 
   if (!user) {
-    return res.status(400).json({ error: "Invalid email or password" });
+    return res.status(400).json({ error: "Invalid name or password" });
   }
 
   if (user.status === "suspended") {
     return res.status(403).json({ error: "Account suspended by admin" });
   }
 
-  res.json({ success: true, user: { id: user.id, name: user.name, email: user.email, role: user.role } });
+  res.json({ 
+    success: true, 
+    user: { 
+      id: user.id, 
+      name: user.name, 
+      email: user.email || "", 
+      phone: user.phone || "",
+      role: user.role,
+      department: user.department || "Sales"
+    } 
+  });
 });
 
 // Users management (Admin Only)
@@ -149,16 +196,56 @@ app.post("/api/users/update-rates", (req, res) => {
   if (req.headers["x-user-role"] !== "admin") {
     return res.status(403).json({ error: "Access Denied: Only administrators can update payroll rates." });
   }
-  const { userId, salaryBase, commissionRate } = req.body;
+  const { userId, salaryBase, commissionRate, monthlyTarget } = req.body;
   const db = readDB();
   const user = db.users.find((u: any) => u.id === userId);
   if (user) {
     user.salaryBase = Number(salaryBase);
     user.commissionRate = Number(commissionRate);
+    if (monthlyTarget !== undefined) {
+      user.monthlyTarget = Number(monthlyTarget) || 5;
+    }
     writeDB(db);
     return res.json({ success: true, user });
   }
   res.status(404).json({ error: "User not found" });
+});
+
+app.post("/api/users/admin-update-user", (req, res) => {
+  if (req.headers["x-user-role"] !== "admin" || req.headers["x-user-id"] !== "u-admin") {
+    return res.status(403).json({ error: "Access Denied: Only the Main Admin can modify user profiles and credentials." });
+  }
+
+  const { userId, name, email, password, phone, role, department, salaryBase, commissionRate, monthlyTarget } = req.body;
+  if (!userId) {
+    return res.status(400).json({ error: "User ID is required" });
+  }
+
+  const db = readDB();
+  const user = db.users.find((u: any) => u.id === userId);
+  if (!user) {
+    return res.status(404).json({ error: "User not found" });
+  }
+
+  if (email && email.toLowerCase() !== user.email.toLowerCase()) {
+    const emailExists = db.users.some((u: any) => u.id !== userId && u.email.toLowerCase() === email.toLowerCase());
+    if (emailExists) {
+      return res.status(400).json({ error: "Email already registered by another user" });
+    }
+    user.email = email;
+  }
+
+  if (name) user.name = name;
+  if (password) user.password = password;
+  if (phone !== undefined) user.phone = phone;
+  if (role) user.role = role;
+  if (department !== undefined) user.department = department;
+  if (salaryBase !== undefined) user.salaryBase = Number(salaryBase);
+  if (commissionRate !== undefined) user.commissionRate = Number(commissionRate);
+  if (monthlyTarget !== undefined) user.monthlyTarget = Number(monthlyTarget);
+
+  writeDB(db);
+  res.json({ success: true, message: "User profile and credentials updated successfully!", user });
 });
 
 app.post("/api/users/toggle-status", (req, res) => {
@@ -338,7 +425,7 @@ app.post("/api/leads/delete", (req, res) => {
 });
 
 app.post("/api/leads/update-status", (req, res) => {
-  const { leadId, status, notes } = req.body;
+  const { leadId, status, notes, dealValue } = req.body;
   const db = readDB();
   const lead = db.leads.find((l: any) => l.id === leadId);
   if (!lead) {
@@ -348,6 +435,9 @@ app.post("/api/leads/update-status", (req, res) => {
   lead.status = status;
   if (notes !== undefined) {
     lead.notes = notes;
+  }
+  if (dealValue !== undefined) {
+    lead.dealValue = Number(dealValue) || 0;
   }
   lead.lastCalled = new Date().toISOString();
 
@@ -405,7 +495,7 @@ app.get("/api/calls", (req, res) => {
 });
 
 app.post("/api/calls/save", (req, res) => {
-  const { leadId, telecallerId, status, duration, notes, recordingBase64 } = req.body;
+  const { leadId, telecallerId, status, duration, notes, recordingBase64, dealValue } = req.body;
   const db = readDB();
 
   const lead = db.leads.find((l: any) => l.id === leadId);
@@ -443,13 +533,17 @@ app.post("/api/calls/save", (req, res) => {
     timestamp: new Date().toISOString(),
     notes: notes || "",
     hasRecording,
-    recordingId: hasRecording ? callId : undefined
+    recordingId: hasRecording ? callId : undefined,
+    dealValue: Number(dealValue) || 0
   };
 
   db.callLogs.push(newLog);
 
   // Update lead status
   lead.status = status;
+  if (dealValue !== undefined) {
+    lead.dealValue = Number(dealValue) || 0;
+  }
   lead.lastCalled = newLog.timestamp;
   if (notes) {
     lead.notes = notes;
@@ -608,6 +702,9 @@ app.post("/api/users/delete", (req, res) => {
   if (!userId) {
     return res.status(400).json({ error: "User ID is required" });
   }
+  if (userId === "u-admin") {
+    return res.status(400).json({ error: "The primary/main administrator account cannot be deleted. (मुख्य एडमिन खाता हटाया नहीं जा सकता।)" });
+  }
   const db = readDB();
   const idx = db.users.findIndex((u: any) => u.id === userId);
   if (idx !== -1) {
@@ -619,9 +716,9 @@ app.post("/api/users/delete", (req, res) => {
       }
     });
     writeDB(db);
-    return res.json({ success: true, message: "Telecaller successfully removed from database." });
+    return res.json({ success: true, message: "User successfully removed from database." });
   }
-  res.status(404).json({ error: "Telecaller not found" });
+  res.status(404).json({ error: "User not found" });
 });
 
 // Admin API: Reset a Telecaller's Conversions & Performance Logs (Reset to zero feature)
@@ -807,6 +904,41 @@ app.post("/api/users/reset-password", (req, res) => {
   res.status(404).json({ error: "User not found" });
 });
 
+// Update Profile API (Name, Email, Password update for admins and users)
+app.post("/api/users/update-profile", (req, res) => {
+  const actorRole = req.headers["x-user-role"];
+  const actorId = req.headers["x-user-id"];
+  const { userId, name, email, password } = req.body;
+
+  if (!userId) {
+    return res.status(400).json({ error: "User ID is required" });
+  }
+
+  if (actorId !== userId && actorRole !== "admin") {
+    return res.status(403).json({ error: "Access Denied: Unauthorized to update this profile" });
+  }
+
+  const db = readDB();
+  const user = db.users.find((u: any) => u.id === userId);
+  if (!user) {
+    return res.status(404).json({ error: "User not found" });
+  }
+
+  if (email && email.toLowerCase() !== user.email.toLowerCase()) {
+    const emailExists = db.users.some((u: any) => u.id !== userId && u.email.toLowerCase() === email.toLowerCase());
+    if (emailExists) {
+      return res.status(400).json({ error: "Email already registered by another user" });
+    }
+    user.email = email;
+  }
+
+  if (name) user.name = name;
+  if (password) user.password = password;
+
+  writeDB(db);
+  res.json({ success: true, message: "Profile updated successfully!", user: { id: user.id, name: user.name, email: user.email, role: user.role } });
+});
+
 // Send Master Recovery Key to Admin's Email
 app.post("/api/auth/send-recovery-email", (req, res) => {
   const { email } = req.body;
@@ -872,6 +1004,910 @@ app.post("/api/auth/reset-by-key", (req, res) => {
   writeDB(db);
 
   res.json({ success: true, message: "पासवर्ड सफलतापूर्वक बदल गया है! अब नए पासवर्ड से लॉग इन करें।" });
+});
+
+// staff password recovery request to Main Admin
+app.post("/api/auth/request-recovery", (req, res) => {
+  const { name } = req.body;
+  if (!name) {
+    return res.status(400).json({ error: "Username/Name is required" });
+  }
+  const db = readDB();
+  const user = db.users.find((u: any) => u.name.trim().toLowerCase() === name.trim().toLowerCase());
+  if (!user) {
+    return res.status(404).json({ error: "यह यूजरनेम पंजीकृत नहीं है (This username is not registered)." });
+  }
+  if (user.id === "u-admin" || user.role === "admin") {
+    return res.status(400).json({ error: "कृपया मुख्य एडमिन रिकवरी विकल्प का उपयोग करें (Please use Main Admin recovery option)." });
+  }
+
+  db.recoveryRequests = db.recoveryRequests || [];
+  // Prevent duplicate pending requests for the same user
+  const existing = db.recoveryRequests.find((r: any) => r.userId === user.id && r.status === "pending");
+  if (existing) {
+    return res.json({ success: true, message: "अनुरोध पहले से ही मुख्य एडमिन के पास लंबित है! (Your request is already pending with the Main Admin!)" });
+  }
+
+  const newRequest = {
+    id: "rec-" + Date.now(),
+    name: user.name,
+    userId: user.id,
+    phone: user.phone || "",
+    email: user.email || "",
+    role: user.role,
+    department: user.department || "Sales",
+    timestamp: new Date().toISOString(),
+    status: "pending"
+  };
+
+  db.recoveryRequests.push(newRequest);
+  writeDB(db);
+
+  res.json({ success: true, message: "पासवर्ड रिकवरी का अनुरोध मुख्य एडमिन को भेज दिया गया है! कृपया रीसेट के लिए एडमिन से संपर्क करें।" });
+});
+
+// Main Admin password recovery (sends password to Whatsapp and registered Email)
+app.post("/api/auth/main-admin-recover", (req, res) => {
+  const { name, email } = req.body;
+  if (!name || !email) {
+    return res.status(400).json({ error: "Name and registered email are required" });
+  }
+  const db = readDB();
+  const user = db.users.find((u: any) => u.id === "u-admin");
+  if (!user) {
+    return res.status(404).json({ error: "मुख्य एडमिन अकाउंट नहीं मिला।" });
+  }
+
+  // Check if name and email match the main admin's credentials
+  const nameMatch = user.name.trim().toLowerCase() === name.trim().toLowerCase();
+  const emailMatch = user.email && user.email.trim().toLowerCase() === email.trim().toLowerCase();
+
+  if (!nameMatch || !emailMatch) {
+    return res.status(400).json({ error: "दर्ज किया गया नाम या ईमेल मुख्य एडमिन के रिकॉर्ड से मेल नहीं खाता है।" });
+  }
+
+  const adminPassword = user.password;
+  const adminPhone = user.phone || "No phone registered";
+
+  // Simulate sending real SMS/WhatsApp/Email to the registered credentials
+  console.log(`==========================================`);
+  console.log(`[REAL-TIME DISPATCH - HUBSPHERE BRANDING]`);
+  console.log(`[WhatsApp Delivery] Sent to ${adminPhone}: "Your HubSphere Main Admin password is: ${adminPassword}"`);
+  console.log(`[Email Delivery] Dispatched to ${user.email}: "Your HubSphere Main Admin password is: ${adminPassword}"`);
+  console.log(`==========================================`);
+
+  res.json({
+    success: true,
+    password: adminPassword,
+    phone: adminPhone,
+    email: user.email,
+    message: `पासवर्ड आपके पंजीकृत व्हाट्सएप (${adminPhone}) और ईमेल (${user.email}) पर भेज दिया गया है! \n\n🔑 आपका पासवर्ड है: "${adminPassword}"`
+  });
+});
+
+// GET pending recovery requests
+app.get("/api/auth/recovery-requests", (req, res) => {
+  if (req.headers["x-user-role"] !== "admin") {
+    return res.status(403).json({ error: "Access Denied" });
+  }
+  const db = readDB();
+  res.json(db.recoveryRequests || []);
+});
+
+// POST resolve pending recovery request
+app.post("/api/auth/resolve-recovery", (req, res) => {
+  if (req.headers["x-user-role"] !== "admin") {
+    return res.status(403).json({ error: "Access Denied" });
+  }
+  const { requestId, newPassword, action } = req.body; // action: 'approve' | 'reject'
+  if (!requestId) {
+    return res.status(400).json({ error: "Request ID is required" });
+  }
+
+  const db = readDB();
+  db.recoveryRequests = db.recoveryRequests || [];
+  const request = db.recoveryRequests.find((r: any) => r.id === requestId);
+  if (!request) {
+    return res.status(404).json({ error: "Request not found" });
+  }
+
+  if (action === "approve") {
+    if (!newPassword) {
+      return res.status(400).json({ error: "New password is required to approve" });
+    }
+    const user = db.users.find((u: any) => u.id === request.userId);
+    if (user) {
+      user.password = newPassword;
+    }
+    request.status = "approved";
+    request.resolvedAt = new Date().toISOString();
+    request.tempPassword = newPassword;
+  } else {
+    request.status = "rejected";
+    request.resolvedAt = new Date().toISOString();
+  }
+
+  writeDB(db);
+  res.json({ success: true, message: action === "approve" ? "Request approved and password reset successfully!" : "Request rejected" });
+});
+
+// HRM, Attendance and Leave Endpoints
+
+// Helper to ensure lists exist
+const getHRMLists = (db: any) => {
+  if (!db.attendance) db.attendance = [];
+  if (!db.leaves) db.leaves = [];
+  if (!db.tasks) db.tasks = [];
+  if (!db.companyHolidays) db.companyHolidays = [];
+  if (!db.reports) db.reports = [];
+  return db;
+};
+
+// Log login
+app.post("/api/attendance/login", (req, res) => {
+  const { userId } = req.body;
+  if (!userId) {
+    return res.status(400).json({ error: "User ID is required" });
+  }
+
+  if (userId === "u-admin") {
+    // Exclude main admin from attendance tracking
+    return res.json({ success: true, ignored: true, message: "Main admin is excluded from attendance tracking" });
+  }
+
+  const db = readDB();
+  getHRMLists(db);
+
+  const user = db.users.find((u: any) => u.id === userId);
+  if (!user) {
+    return res.status(404).json({ error: "User not found" });
+  }
+
+  const today = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
+  const existing = db.attendance.find((a: any) => a.userId === userId && a.date === today);
+
+  if (existing) {
+    return res.json({ success: true, attendance: existing, message: "Already logged in today" });
+  }
+
+  const newRecord = {
+    id: "att-" + Date.now(),
+    userId,
+    userName: user.name,
+    userRole: user.role,
+    date: today,
+    loginTime: new Date().toISOString(),
+    logoutTime: null,
+    status: "Present"
+  };
+
+  db.attendance.push(newRecord);
+  writeDB(db);
+
+  res.json({ success: true, attendance: newRecord, message: "Successfully logged in for today" });
+});
+
+// Log logout
+app.post("/api/attendance/logout", (req, res) => {
+  const { userId } = req.body;
+  if (!userId) {
+    return res.status(400).json({ error: "User ID is required" });
+  }
+
+  if (userId === "u-admin") {
+    return res.json({ success: true, ignored: true });
+  }
+
+  const db = readDB();
+  getHRMLists(db);
+
+  const today = new Date().toISOString().split("T")[0];
+  const record = db.attendance.find((a: any) => a.userId === userId && a.date === today);
+
+  if (record) {
+    record.logoutTime = new Date().toISOString();
+    writeDB(db);
+    return res.json({ success: true, attendance: record, message: "Successfully logged out" });
+  }
+
+  // Fallback: search for latest active with null logoutTime
+  const latestNull = [...db.attendance]
+    .reverse()
+    .find((a: any) => a.userId === userId && !a.logoutTime);
+
+  if (latestNull) {
+    latestNull.logoutTime = new Date().toISOString();
+    writeDB(db);
+    return res.json({ success: true, attendance: latestNull, message: "Successfully logged out from previous session" });
+  }
+
+  res.status(404).json({ error: "No active attendance record found for today to logout." });
+});
+
+// Get attendance logs
+app.get("/api/attendance", (req, res) => {
+  const db = readDB();
+  getHRMLists(db);
+  res.json(db.attendance);
+});
+
+// Get leave logs
+app.get("/api/leaves", (req, res) => {
+  const db = readDB();
+  getHRMLists(db);
+  res.json(db.leaves);
+});
+
+// Apply for leave
+app.post("/api/leaves/apply", (req, res) => {
+  const { userId, reason, startDate, endDate } = req.body;
+  if (!userId || !reason || !startDate || !endDate) {
+    return res.status(400).json({ error: "All fields are required to apply for leave" });
+  }
+
+  const db = readDB();
+  getHRMLists(db);
+
+  const user = db.users.find((u: any) => u.id === userId);
+  if (!user) {
+    return res.status(404).json({ error: "User not found" });
+  }
+
+  // Compute number of days (inclusive)
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  const diffTime = Math.abs(end.getTime() - start.getTime());
+  const daysCount = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+
+  const newLeave = {
+    id: "leave-" + Date.now(),
+    userId,
+    userName: user.name,
+    userRole: user.role,
+    reason,
+    startDate,
+    endDate,
+    daysCount,
+    status: "Pending", // Pending, Approved, Rejected
+    appliedAt: new Date().toISOString(),
+    approvedBy: null
+  };
+
+  db.leaves.push(newLeave);
+  writeDB(db);
+
+  res.json({ success: true, leave: newLeave, message: "Leave applied successfully and is pending main admin approval." });
+});
+
+// Approve / Reject leave
+app.post("/api/leaves/approve", (req, res) => {
+  if (req.headers["x-user-role"] !== "admin") {
+    return res.status(403).json({ error: "Access Denied: Only main administrator can approve or reject leaves." });
+  }
+
+  const { leaveId, action, rejectionReason } = req.body; // action is "Approved" or "Rejected"
+  if (!leaveId || !action) {
+    return res.status(400).json({ error: "Leave ID and action are required" });
+  }
+
+  const db = readDB();
+  getHRMLists(db);
+
+  const leave = db.leaves.find((l: any) => l.id === leaveId);
+  if (!leave) {
+    return res.status(404).json({ error: "Leave application not found" });
+  }
+
+  leave.status = action;
+  leave.approvedBy = "u-admin";
+  if (action === "Rejected") {
+    leave.rejectionReason = rejectionReason || "No reason specified";
+  } else {
+    leave.rejectionReason = null;
+  }
+  
+  writeDB(db);
+  res.json({ success: true, leave, message: `Leave has been successfully ${action.toLowerCase()}` });
+});
+
+// Raise a question/query about a rejected leave
+app.post("/api/leaves/query", (req, res) => {
+  const { leaveId, queryText, userId } = req.body;
+  if (!leaveId || !queryText || !userId) {
+    return res.status(400).json({ error: "Leave ID, query text, and user ID are required" });
+  }
+
+  const db = readDB();
+  getHRMLists(db);
+
+  const leave = db.leaves.find((l: any) => l.id === leaveId);
+  if (!leave) {
+    return res.status(404).json({ error: "Leave application not found" });
+  }
+
+  if (leave.userId !== userId) {
+    return res.status(403).json({ error: "Access Denied: You cannot query this leave application" });
+  }
+
+  if (leave.status !== "Rejected" && leave.status !== "Queried") {
+    return res.status(400).json({ error: "You can only raise questions on rejected leave applications." });
+  }
+
+  leave.query = queryText;
+  leave.status = "Queried";
+  leave.queryResponse = null; // Clear any old responses
+  
+  writeDB(db);
+  res.json({ success: true, leave, message: "Question raised successfully. Awaiting admin response." });
+});
+
+// Respond to a queried leave (main admin)
+app.post("/api/leaves/respond", (req, res) => {
+  if (req.headers["x-user-role"] !== "admin") {
+    return res.status(403).json({ error: "Access Denied: Only main administrator can respond to queries." });
+  }
+
+  const { leaveId, response, action } = req.body; // action can be "Approved" or "Rejected"
+  if (!leaveId || !response || !action) {
+    return res.status(400).json({ error: "Leave ID, response, and action are required" });
+  }
+
+  const db = readDB();
+  getHRMLists(db);
+
+  const leave = db.leaves.find((l: any) => l.id === leaveId);
+  if (!leave) {
+    return res.status(404).json({ error: "Leave application not found" });
+  }
+
+  leave.queryResponse = response;
+  leave.status = action;
+  
+  writeDB(db);
+  res.json({ success: true, leave, message: `Response registered. Leave status is now ${action.toLowerCase()}` });
+});
+
+// ==========================================
+// COMPANY HOLIDAYS ENDPOINTS
+// ==========================================
+app.get("/api/company-holidays", (req, res) => {
+  const db = readDB();
+  getHRMLists(db);
+  res.json(db.companyHolidays || []);
+});
+
+app.post("/api/company-holidays", (req, res) => {
+  if (req.headers["x-user-role"] !== "admin" || req.headers["x-user-id"] !== "u-admin") {
+    return res.status(403).json({ error: "Access Denied: Only Main Admin can declare holidays." });
+  }
+
+  const { date, reason } = req.body;
+  if (!date || !reason) {
+    return res.status(400).json({ error: "Date and reason are required" });
+  }
+
+  const db = readDB();
+  getHRMLists(db);
+
+  const existing = db.companyHolidays.find((h: any) => h.date === date);
+  if (existing) {
+    existing.reason = reason;
+  } else {
+    db.companyHolidays.push({
+      id: "hol-" + Date.now(),
+      date,
+      reason
+    });
+  }
+
+  writeDB(db);
+  res.json({ success: true, message: "Company Holiday declared successfully!" });
+});
+
+app.delete("/api/company-holidays/:id", (req, res) => {
+  if (req.headers["x-user-role"] !== "admin" || req.headers["x-user-id"] !== "u-admin") {
+    return res.status(403).json({ error: "Access Denied: Only Main Admin can delete holidays." });
+  }
+
+  const { id } = req.params;
+  const db = readDB();
+  getHRMLists(db);
+
+  db.companyHolidays = db.companyHolidays.filter((h: any) => h.id !== id);
+  writeDB(db);
+  res.json({ success: true, message: "Company Holiday deleted successfully." });
+});
+
+// ==========================================
+// SUB-ADMIN WORK / TASK ENDPOINTS
+// ==========================================
+// ==========================================
+// WORK / TASK ENDPOINTS FOR SYSTEM WORKFLOW
+// ==========================================
+app.get("/api/tasks", (req, res) => {
+  const db = readDB();
+  getHRMLists(db);
+
+  const { adminId, assignedTo, assignedBy, department } = req.query;
+  let userTasks = db.tasks || [];
+
+  // Backward compatibility support for adminId parameter
+  if (adminId) {
+    userTasks = userTasks.filter((t: any) => t.adminId === adminId || t.assignedTo === adminId);
+    return res.json(userTasks);
+  }
+
+  if (assignedTo) {
+    userTasks = userTasks.filter((t: any) => t.assignedTo === assignedTo || t.adminId === assignedTo);
+  }
+  if (assignedBy) {
+    userTasks = userTasks.filter((t: any) => t.assignedBy === assignedBy);
+  }
+  if (department) {
+    userTasks = userTasks.filter((t: any) => t.department === department);
+  }
+
+  res.json(userTasks);
+});
+
+app.post("/api/tasks", (req, res) => {
+  const { adminId, adminName, title, date, assignedTo, assignedToName, assignedBy, assignedByName, department } = req.body;
+  
+  const finalAssignedTo = assignedTo || adminId;
+  const finalAssignedToName = assignedToName || adminName;
+  const finalAssignedBy = assignedBy || req.headers["x-user-id"] || "u-admin";
+  const finalAssignedByName = assignedByName || "Administrator";
+
+  if (!finalAssignedTo || !finalAssignedToName || !title || !date) {
+    return res.status(400).json({ error: "Assignee details, task Title, and Date are required." });
+  }
+
+  const db = readDB();
+  getHRMLists(db);
+
+  const newTask = {
+    id: "task-" + Date.now(),
+    adminId: finalAssignedTo, // backward compatibility
+    adminName: finalAssignedToName, // backward compatibility
+    assignedTo: finalAssignedTo,
+    assignedToName: finalAssignedToName,
+    assignedBy: finalAssignedBy,
+    assignedByName: finalAssignedByName,
+    department: department || null,
+    title,
+    date,
+    status: "Pending", // Pending, Submitted, Approved, Denied, Appealed
+    remark: null,
+    adminReply: null,
+    appeal: null,
+    appealReply: null
+  };
+
+  db.tasks.push(newTask);
+  writeDB(db);
+  res.json({ success: true, task: newTask, message: "Task assigned successfully!" });
+});
+
+app.post("/api/tasks/submit", (req, res) => {
+  const { taskId, status, remark } = req.body;
+  if (!taskId || !status || !remark) {
+    return res.status(400).json({ error: "Task ID, status, and genuine remark are required." });
+  }
+
+  const db = readDB();
+  getHRMLists(db);
+
+  const task = db.tasks.find((t: any) => t.id === taskId);
+  if (!task) {
+    return res.status(404).json({ error: "Task not found." });
+  }
+
+  task.status = status === "Completed" ? "Submitted" : "Pending";
+  task.remark = remark;
+  task.adminReply = null;
+  task.appeal = null;
+  task.appealReply = null;
+
+  writeDB(db);
+  res.json({ success: true, task, message: "Task update submitted successfully!" });
+});
+
+app.post("/api/tasks/evaluate", (req, res) => {
+  const { taskId, action, adminReply } = req.body;
+  const actorId = req.headers["x-user-id"];
+  const actorRole = req.headers["x-user-role"];
+
+  if (!taskId || !action || !adminReply) {
+    return res.status(400).json({ error: "Task ID, evaluation action, and reply are required." });
+  }
+
+  const db = readDB();
+  getHRMLists(db);
+
+  const task = db.tasks.find((t: any) => t.id === taskId);
+  if (!task) {
+    return res.status(404).json({ error: "Task not found." });
+  }
+
+  // Allow evaluation if caller is Main Admin, or if they are the task assigner, or if they are an admin
+  const isAllowed = actorId === "u-admin" || task.assignedBy === actorId || actorRole === "admin";
+  if (!isAllowed) {
+    return res.status(403).json({ error: "Access Denied: You cannot evaluate this task." });
+  }
+
+  task.status = action;
+  task.adminReply = adminReply;
+
+  writeDB(db);
+  res.json({ success: true, task, message: `Task has been ${action.toLowerCase()} successfully.` });
+});
+
+app.post("/api/tasks/appeal", (req, res) => {
+  const { taskId, appeal } = req.body;
+  if (!taskId || !appeal) {
+    return res.status(400).json({ error: "Task ID and appeal question are required." });
+  }
+
+  const db = readDB();
+  getHRMLists(db);
+
+  const task = db.tasks.find((t: any) => t.id === taskId);
+  if (!task) {
+    return res.status(404).json({ error: "Task not found." });
+  }
+
+  task.status = "Appealed";
+  task.appeal = appeal;
+  task.appealReply = null;
+
+  writeDB(db);
+  res.json({ success: true, task, message: "Appeal/Question raised successfully!" });
+});
+
+app.post("/api/tasks/appeal-reply", (req, res) => {
+  const { taskId, appealReply, action } = req.body;
+  const actorId = req.headers["x-user-id"];
+  const actorRole = req.headers["x-user-role"];
+
+  if (!taskId || !appealReply || !action) {
+    return res.status(400).json({ error: "Task ID, reply instruction, and final action are required." });
+  }
+
+  const db = readDB();
+  getHRMLists(db);
+
+  const task = db.tasks.find((t: any) => t.id === taskId);
+  if (!task) {
+    return res.status(404).json({ error: "Task not found." });
+  }
+
+  // Allow appeal reply if Main Admin or task creator
+  const isAllowed = actorId === "u-admin" || task.assignedBy === actorId || actorRole === "admin";
+  if (!isAllowed) {
+    return res.status(403).json({ error: "Access Denied: You cannot answer this appeal." });
+  }
+
+  task.appealReply = appealReply;
+  task.status = action;
+
+  writeDB(db);
+  res.json({ success: true, task, message: `Response registered. Task status updated to ${action}.` });
+});
+
+// ==========================================
+// DEPARTMENTAL WORKFLOW REPORTING ENDPOINTS
+// ==========================================
+app.get("/api/reports", (req, res) => {
+  const db = readDB();
+  getHRMLists(db);
+  res.json(db.reports || []);
+});
+
+app.post("/api/reports/submit", (req, res) => {
+  const { type, senderId, senderName, senderRole, department, reportText, date } = req.body;
+  if (!senderId || !senderName || !reportText || !date) {
+    return res.status(400).json({ error: "Sender details, reportText, and date are required." });
+  }
+
+  const db = readDB();
+  getHRMLists(db);
+
+  const newReport = {
+    id: "rep-" + Date.now(),
+    type: type || "department", // department (Head -> Sub-Admin) or consolidated (Sub-Admin -> Main Admin)
+    senderId,
+    senderName,
+    senderRole: senderRole || "head",
+    department: department || "Sales",
+    reportText,
+    date,
+    status: "Pending", // Pending, Reviewed
+    reviewedBy: null,
+    reviewedByName: null,
+    feedback: null,
+    reviewedAt: null
+  };
+
+  db.reports.push(newReport);
+  writeDB(db);
+  res.json({ success: true, report: newReport, message: "Department work report submitted successfully!" });
+});
+
+app.post("/api/reports/review", (req, res) => {
+  const { reportId, reviewerId, reviewerName, feedback } = req.body;
+  if (!reportId || !reviewerId || !reviewerName || !feedback) {
+    return res.status(400).json({ error: "Report ID, reviewer details, and feedback are required." });
+  }
+
+  const db = readDB();
+  getHRMLists(db);
+
+  const report = db.reports.find((r: any) => r.id === reportId);
+  if (!report) {
+    return res.status(404).json({ error: "Report not found." });
+  }
+
+  report.status = "Reviewed";
+  report.reviewedBy = reviewerId;
+  report.reviewedByName = reviewerName;
+  report.feedback = feedback;
+  report.reviewedAt = new Date().toISOString();
+
+  writeDB(db);
+  res.json({ success: true, report, message: "Report reviewed and feedback sent successfully!" });
+});
+
+// GET payroll and attendance report
+app.get("/api/payroll/report", (req, res) => {
+  const db = readDB();
+  getHRMLists(db);
+
+  const targetMonth = (req.query.month as string) || new Date().toISOString().slice(0, 7); // YYYY-MM
+  const [yr, mn] = targetMonth.split("-").map(Number);
+
+  if (!yr || !mn || mn < 1 || mn > 12) {
+    return res.status(400).json({ error: "Invalid month format. Expected YYYY-MM" });
+  }
+
+  const daysInMonth = new Date(yr, mn, 0).getDate();
+  const isFeb = mn === 2;
+
+  // Filter out the main admin u-admin
+  const eligibleUsers = db.users.filter((u: any) => u.id !== "u-admin" && u.email !== "contact.grahicsworld@gmail.com");
+
+  const report = eligibleUsers.map((user: any) => {
+    const salaryBase = user.salaryBase || 12000;
+    const commissionRate = user.commissionRate || 100;
+    const monthlyTarget = user.monthlyTarget || 5;
+    const perDaySalary = Number((salaryBase / daysInMonth).toFixed(2));
+
+    let totalDeductions = 0;
+    let presentDays = 0;
+    let leaveDays = 0;
+    let absentDays = 0;
+    let sundayPaidCount = 0;
+    let sundayDeductedCount = 0;
+    let companyHolidaysCount = 0;
+
+    const detailDays: any[] = [];
+    const todayStr = new Date().toISOString().split("T")[0];
+
+    // Loop through each day of the target month
+    for (let d = 1; d <= daysInMonth; d++) {
+      const dayStr = String(d).padStart(2, "0");
+      const dateStr = `${yr}-${String(mn).padStart(2, "0")}-${dayStr}`;
+      
+      const dayOfWeek = new Date(yr, mn - 1, d).getDay(); // 0 = Sunday, 1 = Monday, etc.
+
+      // Check if user was present
+      const attRecord = db.attendance.find((a: any) => a.userId === user.id && a.date === dateStr);
+      
+      // Check if user has an approved leave
+      const isApprovedLeave = db.leaves.some(
+        (l: any) => l.userId === user.id && l.status === "Approved" && l.startDate <= dateStr && l.endDate >= dateStr
+      );
+
+      // Check if declared as Company-wide Holiday by Main Admin
+      const isCompanyHoliday = db.companyHolidays.some((h: any) => h.date === dateStr);
+
+      if (isCompanyHoliday) {
+        // Puree staff ko main admin leave de -> fully paid leave! (No deduction)
+        companyHolidaysCount++;
+        detailDays.push({ 
+          date: dateStr, 
+          day: d, 
+          type: "CompanyHoliday", 
+          label: "Company Holiday (Paid)", 
+          deductionFraction: 0 
+        });
+      } else if (dayOfWeek === 0) {
+        // It is Sunday!
+        if (isFeb) {
+          sundayPaidCount++;
+          detailDays.push({ 
+            date: dateStr, 
+            day: d, 
+            type: "Sunday-Paid", 
+            label: "Sunday (Paid)", 
+            deductionFraction: 0 
+          });
+        } else {
+          // Rule: Sunday is paid if NOT on leave or absent on BOTH Saturday and Monday
+          const satDate = new Date(yr, mn - 1, d - 1);
+          const satStr = satDate.toISOString().split("T")[0];
+          const monDate = new Date(yr, mn - 1, d + 1);
+          const monStr = monDate.toISOString().split("T")[0];
+
+          const satLeaveOrAbsent = db.leaves.some((l: any) => l.userId === user.id && l.status === "Approved" && l.startDate <= satStr && l.endDate >= satStr) 
+            || !db.attendance.some((a: any) => a.userId === user.id && a.date === satStr);
+            
+          const monLeaveOrAbsent = db.leaves.some((l: any) => l.userId === user.id && l.status === "Approved" && l.startDate <= monStr && l.endDate >= monStr) 
+            || !db.attendance.some((a: any) => a.userId === user.id && a.date === monStr);
+
+          if (satLeaveOrAbsent || monLeaveOrAbsent) {
+            sundayDeductedCount++;
+            detailDays.push({ 
+              date: dateStr, 
+              day: d, 
+              type: "Sunday-Deducted", 
+              label: "Sunday (Deducted - Sat/Mon Leave)", 
+              deductionFraction: 1.0 
+            });
+            totalDeductions += perDaySalary;
+          } else {
+            sundayPaidCount++;
+            detailDays.push({ 
+              date: dateStr, 
+              day: d, 
+              type: "Sunday-Paid", 
+              label: "Sunday (Paid)", 
+              deductionFraction: 0 
+            });
+          }
+        }
+      } else {
+        // Regular weekday/Saturday
+        if (attRecord) {
+          let workHours = 0;
+          if (attRecord.loginTime && attRecord.logoutTime) {
+            const diffMs = new Date(attRecord.logoutTime).getTime() - new Date(attRecord.loginTime).getTime();
+            workHours = Number((diffMs / (1000 * 60 * 60)).toFixed(2));
+          } else if (attRecord.loginTime && dateStr === todayStr) {
+            workHours = 9.0;
+          } else {
+            workHours = 4.0; // Past day forgotten logout
+          }
+
+          if (workHours >= 9.0) {
+            presentDays++;
+            detailDays.push({ 
+              date: dateStr, 
+              day: d, 
+              type: "Present", 
+              label: `Present (${workHours} hrs - Full Day)`, 
+              deductionFraction: 0 
+            });
+          } else if (workHours >= 4.0) {
+            presentDays += 0.5;
+            detailDays.push({ 
+              date: dateStr, 
+              day: d, 
+              type: "Present-Half", 
+              label: `Present (${workHours} hrs - Half Day)`, 
+              deductionFraction: 0.5 
+            });
+            totalDeductions += 0.5 * perDaySalary;
+          } else {
+            absentDays++;
+            detailDays.push({ 
+              date: dateStr, 
+              day: d, 
+              type: "Absent", 
+              label: `Present (${workHours} hrs - Short Logout < 4 hrs)`, 
+              deductionFraction: 1.0 
+            });
+            totalDeductions += perDaySalary;
+          }
+        } else if (isApprovedLeave) {
+          // Approved leave passed by main admin counts as payed half salary! (Deducted 50%)
+          leaveDays++;
+          detailDays.push({ 
+            date: dateStr, 
+            day: d, 
+            type: "Leave-Approved", 
+            label: "Approved Leave (Half Pay)", 
+            deductionFraction: 0.5 
+          });
+          totalDeductions += 0.5 * perDaySalary;
+        } else {
+          absentDays++;
+          detailDays.push({ 
+            date: dateStr, 
+            day: d, 
+            type: "Absent", 
+            label: "Absent (Deducted)", 
+            deductionFraction: 1.0 
+          });
+          totalDeductions += perDaySalary;
+        }
+      }
+    }
+
+    const finalBasicSalary = Number(Math.max(0, salaryBase - totalDeductions).toFixed(2));
+
+    // Calculate calling metrics in the target month (only applicable/relevant to telecallers, but calculated for overview)
+    const userLogs = db.callLogs.filter(
+      (c: any) => c.telecallerId === user.id && c.timestamp && c.timestamp.startsWith(targetMonth)
+    );
+
+    const totalCalls = userLogs.length;
+    const interestedCount = userLogs.filter((c: any) => c.status === "Interested").length;
+    const salesDoneCount = userLogs.filter((c: any) => c.status === "Sales Done").length;
+    
+    const businessRevenue = userLogs
+      .filter((c: any) => c.status === "Sales Done")
+      .reduce((sum: number, c: any) => sum + (Number(c.dealValue) || 0), 0);
+
+    // Performance Pct and Incentive
+    let performancePct = 0;
+    let incentivePct = 0;
+    let incentiveAmount = 0;
+
+    const isSalesRole = user.role === "telecaller" || (user.role === "staff" && user.department === "Sales");
+
+    if (isSalesRole) {
+      performancePct = monthlyTarget > 0 ? Number(((salesDoneCount / monthlyTarget) * 100).toFixed(2)) : 0;
+      if (performancePct > 100) {
+        incentivePct = Number((performancePct - 100).toFixed(2));
+        incentiveAmount = Number(((incentivePct / 100) * salaryBase).toFixed(2));
+      }
+    } else {
+      // Sub-admin, department head, or Tech/NonTech staff tasks performance and incentive
+      const monthTasks = db.tasks.filter((t: any) => (t.adminId === user.id || t.assignedTo === user.id) && t.date && t.date.startsWith(targetMonth));
+      const totalTasks = monthTasks.length;
+      const approvedTasks = monthTasks.filter((t: any) => t.status === "Approved").length;
+      
+      performancePct = totalTasks > 0 ? Number(((approvedTasks / totalTasks) * 100).toFixed(2)) : 100;
+      incentiveAmount = approvedTasks * commissionRate; // Commission/Incentive per approved task
+    }
+
+    const finalSalary = Number((finalBasicSalary + incentiveAmount).toFixed(2));
+
+    return {
+      userId: user.id,
+      name: user.name,
+      email: user.email,
+      phone: user.phone || "",
+      role: user.role,
+      department: user.department || "Sales",
+      salaryBase,
+      commissionRate,
+      monthlyTarget,
+      daysInMonth,
+      perDaySalary,
+      presentDays,
+      leaveDays,
+      absentDays,
+      sundayPaidCount,
+      sundayDeductedCount,
+      companyHolidaysCount,
+      totalDeductions: Number(totalDeductions.toFixed(2)),
+      finalBasicSalary,
+      totalCalls,
+      interestedCount,
+      salesDoneCount,
+      businessRevenue,
+      performancePct,
+      incentivePct,
+      incentiveAmount,
+      finalSalary,
+      detailDays,
+      totalTasks: isSalesRole ? 0 : db.tasks.filter((t: any) => (t.adminId === user.id || t.assignedTo === user.id) && t.date && t.date.startsWith(targetMonth)).length,
+      approvedTasks: isSalesRole ? 0 : db.tasks.filter((t: any) => (t.adminId === user.id || t.assignedTo === user.id) && t.date && t.date.startsWith(targetMonth) && t.status === "Approved").length
+    };
+  });
+
+  res.json({ success: true, month: targetMonth, report });
 });
 
 // Auto-calling configuration

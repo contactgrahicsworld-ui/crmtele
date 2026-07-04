@@ -1,72 +1,81 @@
 import React, { useState } from 'react';
-import { Shield, Phone, Loader2, Key } from 'lucide-react';
+import { Shield, Phone, Loader2, Key, HelpCircle, Mail, User } from 'lucide-react';
 
 interface LoginScreenProps {
-  onLoginSuccess: (user: { id: string; name: string; email: string; role: 'admin' | 'telecaller' }) => void;
+  onLoginSuccess: (user: { 
+    id: string; 
+    name: string; 
+    email: string; 
+    phone?: string;
+    role: 'admin' | 'head' | 'staff' | 'telecaller';
+    department?: 'Tech' | 'NonTech' | 'Sales';
+  }) => void;
 }
 
 export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   const [activeTab, setActiveTab] = useState<'signin' | 'register' | 'recovery'>('signin');
-  const [role, setRole] = useState<'admin' | 'telecaller'>('admin');
+  const [role, setRole] = useState<'main_admin' | 'admin' | 'head' | 'staff' | 'telecaller'>('admin');
+  const [recoveryType, setRecoveryType] = useState<'staff' | 'main_admin'>('staff');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
+  const [department, setDepartment] = useState<'Tech' | 'NonTech' | 'Sales'>('Sales');
   const [password, setPassword] = useState('');
-  const [masterKey, setMasterKey] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  const [sendingKey, setSendingKey] = useState(false);
 
-  const handleSendRecoveryEmail = async () => {
-    if (!email) {
-      setError('कृपया पहले अपना पंजीकृत ईमेल पता दर्ज करें (Please enter your registered email first).');
+  const handleStaffRecoverySubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name) {
+      setError('कृपया अपना पंजीकृत यूजरनेम दर्ज करें (Please enter your registered username).');
       return;
     }
-    setError('');
-    setSuccess('');
-    setSendingKey(true);
-    try {
-      const res = await fetch('/api/auth/send-recovery-email', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Something went wrong');
-      }
-      setSuccess(data.message || 'रिकवरी की आपके पंजीकृत ईमेल पर भेज दी गई है!');
-    } catch (err: any) {
-      setError(err.message || 'रिकवरी की भेजने में त्रुटि हुई।');
-    } finally {
-      setSendingKey(false);
-    }
-  };
-
-  const handleRecoverySubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
     setError('');
     setSuccess('');
     setLoading(true);
 
     try {
-      const res = await fetch('/api/auth/reset-by-key', {
+      const res = await fetch('/api/auth/request-recovery', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, masterKey, newPassword: password }),
+        body: JSON.stringify({ name }),
       });
       const data = await res.json();
-
       if (!res.ok) {
         throw new Error(data.error || 'Something went wrong');
       }
-
-      setSuccess('पासवर्ड सफलतापूर्वक बदल गया है! अब नए पासवर्ड से लॉग इन करें।');
-      setActiveTab('signin');
-      setMasterKey('');
-      setPassword('');
+      setSuccess(data.message || 'अनुरोध सफलतापूर्वक भेज दिया गया है!');
     } catch (err: any) {
-      setError(err.message || 'Error updating password. Please try again.');
+      setError(err.message || 'रिकवरी अनुरोध भेजने में त्रुटि हुई।');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleMainAdminRecoverySubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name || !email) {
+      setError('नाम और पंजीकृत ईमेल दोनों दर्ज करें (Please enter both your name and registered email).');
+      return;
+    }
+    setError('');
+    setSuccess('');
+    setLoading(true);
+
+    try {
+      const res = await fetch('/api/auth/main-admin-recover', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, email }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Something went wrong');
+      }
+      setSuccess(data.message || 'पासवर्ड आपके व्हाट्सएप और ईमेल पर भेज दिया गया है!');
+    } catch (err: any) {
+      setError(err.message || 'मुख्य एडमिन रिकवरी में त्रुटि हुई।');
     } finally {
       setLoading(false);
     }
@@ -75,7 +84,11 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (activeTab === 'recovery') {
-      return handleRecoverySubmit(e);
+      if (recoveryType === 'staff') {
+        return handleStaffRecoverySubmit(e);
+      } else {
+        return handleMainAdminRecoverySubmit(e);
+      }
     }
     setError('');
     setSuccess('');
@@ -83,8 +96,8 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
 
     const url = activeTab === 'signin' ? '/api/auth/login' : '/api/auth/register';
     const payload = activeTab === 'signin' 
-      ? { email, password } 
-      : { name, email, password, role };
+      ? { name, password } 
+      : { name, email, password, role, phone, department };
 
     try {
       const res = await fetch(url, {
@@ -115,16 +128,17 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
 
   return (
     <div className="min-h-screen bg-[#090b11] text-gray-100 flex flex-col justify-center items-center p-4 font-sans selection:bg-orange-500 selection:text-white">
-      {/* Logo & Header */}
-      <div className="flex flex-col items-center mb-8 text-center">
-        <div className="flex items-center gap-3 bg-gradient-to-br from-orange-500 to-amber-600 p-4 rounded-3xl shadow-lg shadow-orange-500/20 mb-3 animate-fade-in">
-          <Phone className="w-8 h-8 text-white fill-white" />
+      {/* Logo & Header inside an elegant high-contrast white container */}
+      <div className="flex flex-col items-center mb-8 text-center bg-white px-8 py-5 rounded-3xl shadow-xl border border-gray-100 max-w-sm w-full">
+        <div className="flex items-center gap-3 bg-gradient-to-br from-orange-500 to-amber-500 p-3.5 rounded-2xl shadow-lg shadow-orange-500/20 mb-3">
+          <Shield className="w-7 h-7 text-white fill-white" />
         </div>
-        <h1 className="text-3xl font-extrabold tracking-tight text-white flex items-center gap-1">
-          Tele-<span className="text-[#f97316]">CRM</span>
+        <h1 className="text-3xl font-black tracking-tight flex items-center gap-0">
+          <span className="text-[#f97316]">Hub</span>
+          <span className="text-black">Sphere</span>
         </h1>
-        <p className="text-sm font-medium text-gray-400 mt-2 tracking-wide">
-          Zero-Cost Operational CRM & Dialer Console
+        <p className="text-xs font-bold text-black mt-2 tracking-wide text-center">
+          Your Team. Your Clients. One Sphere.
         </p>
       </div>
 
@@ -195,12 +209,48 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
           </div>
         )}
         {success && (
-          <div className="bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs rounded-lg p-3 mb-4 font-medium">
+          <div className="bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs rounded-lg p-3 mb-4 font-medium whitespace-pre-line">
             ✅ {success}
           </div>
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          {/* Recovery Type Toggle (Only shown in recovery tab) */}
+          {activeTab === 'recovery' && (
+            <div className="bg-[#1a202c] p-1.5 rounded-xl border border-[#2d3748] flex gap-1 mb-4">
+              <button
+                type="button"
+                onClick={() => {
+                  setRecoveryType('staff');
+                  setError('');
+                  setSuccess('');
+                }}
+                className={`flex-1 text-center py-2 rounded-lg font-bold text-[10px] transition-all cursor-pointer ${
+                  recoveryType === 'staff'
+                    ? 'bg-[#f97316] text-white'
+                    : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                👤 Staff Recovery (स्टाफ सदस्य)
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setRecoveryType('main_admin');
+                  setError('');
+                  setSuccess('');
+                }}
+                className={`flex-1 text-center py-2 rounded-lg font-bold text-[10px] transition-all cursor-pointer ${
+                  recoveryType === 'main_admin'
+                    ? 'bg-[#f97316] text-white'
+                    : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                👑 Main Admin Recovery (मुख्य एडमिन)
+              </button>
+            </div>
+          )}
+
           {activeTab === 'register' && (
             <>
               {/* Account Role Selection */}
@@ -208,133 +258,189 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                 <label className="block text-xs font-semibold text-gray-400 mb-2 uppercase tracking-wider">
                   Account Role (खाते का प्रकार)
                 </label>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-2 gap-2">
                   <button
-                    id="role-admin-btn"
+                    type="button"
+                    onClick={() => setRole('main_admin')}
+                    className={`flex items-center justify-center gap-1 py-2.5 rounded-xl border font-bold text-[10px] transition-all duration-150 ${
+                      role === 'main_admin'
+                        ? 'bg-[#f97316] border-[#f97316] text-white shadow-md shadow-orange-500/10'
+                        : 'bg-[#151922] border-[#222b3c] text-gray-400 hover:border-gray-600'
+                    }`}
+                  >
+                    <Shield className="w-3 h-3" />
+                    Main Admin (मुख्य)
+                  </button>
+                  <button
                     type="button"
                     onClick={() => setRole('admin')}
-                    className={`flex items-center justify-center gap-2 py-2.5 rounded-xl border font-bold text-xs transition-all duration-150 ${
+                    className={`flex items-center justify-center gap-1 py-2.5 rounded-xl border font-bold text-[10px] transition-all duration-150 ${
                       role === 'admin'
                         ? 'bg-[#f97316] border-[#f97316] text-white shadow-md shadow-orange-500/10'
                         : 'bg-[#151922] border-[#222b3c] text-gray-400 hover:border-gray-600'
                     }`}
                   >
-                    <Shield className="w-4 h-4" />
-                    Admin (प्रबंधक)
+                    <Shield className="w-3 h-3" />
+                    Sub-Admin (सहायक)
                   </button>
                   <button
-                    id="role-caller-btn"
                     type="button"
-                    onClick={() => setRole('telecaller')}
-                    className={`flex items-center justify-center gap-2 py-2.5 rounded-xl border font-bold text-xs transition-all duration-150 ${
-                      role === 'telecaller'
+                    onClick={() => setRole('head')}
+                    className={`flex items-center justify-center gap-1 py-2.5 rounded-xl border font-bold text-[10px] transition-all duration-150 ${
+                      role === 'head'
                         ? 'bg-[#f97316] border-[#f97316] text-white shadow-md shadow-orange-500/10'
                         : 'bg-[#151922] border-[#222b3c] text-gray-400 hover:border-gray-600'
                     }`}
                   >
-                    <Phone className="w-4 h-4" />
-                    Telecaller (कॉलर)
+                    <Shield className="w-3 h-3" />
+                    Dept Head (प्रमुख)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRole('staff')}
+                    className={`flex items-center justify-center gap-1 py-2.5 rounded-xl border font-bold text-[10px] transition-all duration-150 ${
+                      role === 'staff' || role === 'telecaller'
+                        ? 'bg-[#f97316] border-[#f97316] text-white shadow-md shadow-orange-500/10'
+                        : 'bg-[#151922] border-[#222b3c] text-gray-400 hover:border-gray-600'
+                    }`}
+                  >
+                    <Phone className="w-3 h-3" />
+                    Staff (स्टाफ सदस्य)
                   </button>
                 </div>
               </div>
 
-              {/* Name Field */}
+              {/* Department Segment Selection */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-400 mb-2 uppercase tracking-wider">
+                  Company Segment / Department (विभाग)
+                </label>
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setDepartment('Tech')}
+                    className={`py-2 rounded-xl border font-bold text-[10px] transition-all duration-150 ${
+                      department === 'Tech'
+                        ? 'bg-[#f97316] border-[#f97316] text-white shadow-md'
+                        : 'bg-[#151922] border-[#222b3c] text-gray-400 hover:border-gray-600'
+                    }`}
+                  >
+                    💻 Tech (तकनीकी)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDepartment('NonTech')}
+                    className={`py-2 rounded-xl border font-bold text-[10px] transition-all duration-150 ${
+                      department === 'NonTech'
+                        ? 'bg-[#f97316] border-[#f97316] text-white shadow-md'
+                        : 'bg-[#151922] border-[#222b3c] text-gray-400 hover:border-gray-600'
+                    }`}
+                  >
+                    ⚙️ Non-Tech (सामान्य)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDepartment('Sales')}
+                    className={`py-2 rounded-xl border font-bold text-[10px] transition-all duration-150 ${
+                      department === 'Sales'
+                        ? 'bg-[#f97316] border-[#f97316] text-white shadow-md'
+                        : 'bg-[#151922] border-[#222b3c] text-gray-400 hover:border-gray-600'
+                    }`}
+                  >
+                    📞 Sales (मार्केटिंग)
+                  </button>
+                </div>
+              </div>
+
+              {/* Phone Field */}
               <div>
                 <label className="block text-xs font-semibold text-gray-400 mb-1.5 uppercase tracking-wider">
-                  Your Name (आपका नाम)
+                  Phone / WhatsApp Number (फ़ोन / व्हाट्सएप नंबर)
                 </label>
                 <input
-                  id="reg-name-input"
                   type="text"
                   required
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="e.g. Suresh Gupta"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  placeholder="e.g. 9876543210"
                   className="w-full bg-[#0e121a] border border-[#222b3c] focus:border-[#f97316] rounded-xl px-4 py-2.5 text-sm text-gray-100 outline-none placeholder:text-gray-600 transition-all duration-250"
                 />
               </div>
             </>
           )}
 
-          {/* Email Field */}
-          <div>
-            <label className="block text-xs font-semibold text-gray-400 mb-1.5 uppercase tracking-wider">
-              Email Address (ईमेल पता)
-            </label>
-            <input
-              id="email-input"
-              type="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="e.g. name@company.com"
-              className="w-full bg-[#0e121a] border border-[#222b3c] focus:border-[#f97316] rounded-xl px-4 py-2.5 text-sm text-gray-100 outline-none placeholder:text-gray-600 transition-all duration-250"
-            />
-          </div>
-
-          {/* Master Key Field (Only shown in recovery mode) */}
-          {activeTab === 'recovery' && (
+          {/* Name Field (shown in sign-in, register, and recovery tabs) */}
+          {(activeTab === 'signin' || activeTab === 'register' || activeTab === 'recovery') && (
             <div>
-              <div className="flex justify-between items-center mb-1.5">
-                <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-1.5">
-                  <Key className="w-3.5 h-3.5 text-[#f97316]" />
-                  Master Recovery Key (मास्टर रिकवरी की)
-                </label>
-                <button
-                  type="button"
-                  disabled={sendingKey}
-                  onClick={handleSendRecoveryEmail}
-                  className="text-xs text-[#f97316] hover:underline cursor-pointer disabled:opacity-50"
-                >
-                  {sendingKey ? 'भेज रहे हैं...' : 'Send to Email (ईमेल पर भेजें)'}
-                </button>
-              </div>
+              <label className="block text-xs font-semibold text-gray-400 mb-1.5 uppercase tracking-wider flex items-center gap-1">
+                <User className="w-3.5 h-3.5 text-gray-500" />
+                {activeTab === 'recovery' && recoveryType === 'main_admin' 
+                  ? 'Main Admin Name (मुख्य एडमिन का नाम)' 
+                  : 'Your Name / Username (आपका नाम / यूजरनेम)'}
+              </label>
               <input
-                id="master-key-input"
-                type="password"
+                id="name-input"
+                type="text"
                 required
-                value={masterKey}
-                onChange={(e) => setMasterKey(e.target.value)}
-                placeholder="डिफ़ॉल्ट कोड दर्ज करें (उदा. 0000)"
-                className="w-full bg-[#0e121a] border border-[#222b3c] focus:border-[#f97316] rounded-xl px-4 py-2.5 text-sm text-gray-100 outline-none placeholder:text-gray-600 transition-all duration-250 font-mono"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="e.g. Suresh Gupta"
+                className="w-full bg-[#0e121a] border border-[#222b3c] focus:border-[#f97316] rounded-xl px-4 py-2.5 text-sm text-gray-100 outline-none placeholder:text-gray-600 transition-all duration-250"
               />
             </div>
           )}
 
-          {/* Password Field */}
-          <div>
-            <div className="flex justify-between items-center mb-1.5">
-              <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider">
-                {activeTab === 'signin' 
-                  ? 'Password (पासवर्ड)' 
-                  : activeTab === 'register' 
-                    ? 'Password (पासवर्ड सेट करें)' 
-                    : 'Choose New Password (नया पासवर्ड चुनें)'}
+          {/* Email Field (shown in register and main_admin recovery) */}
+          {(activeTab === 'register' || (activeTab === 'recovery' && recoveryType === 'main_admin')) && (
+            <div>
+              <label className="block text-xs font-semibold text-gray-400 mb-1.5 uppercase tracking-wider flex items-center gap-1">
+                <Mail className="w-3.5 h-3.5 text-gray-500" />
+                Email Address (पंजीकृत ईमेल पता)
               </label>
-              {activeTab === 'signin' && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActiveTab('recovery');
-                    setError('');
-                    setSuccess('');
-                  }}
-                  className="text-xs text-[#f97316] hover:underline font-medium"
-                >
-                  Forgot your password? (पासवर्ड भूल गए?)
-                </button>
-              )}
+              <input
+                id="email-input"
+                type="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="e.g. name@company.com"
+                className="w-full bg-[#0e121a] border border-[#222b3c] focus:border-[#f97316] rounded-xl px-4 py-2.5 text-sm text-gray-100 outline-none placeholder:text-gray-600 transition-all duration-250"
+              />
             </div>
-            <input
-              id="password-input"
-              type="password"
-              required
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
-              className="w-full bg-[#0e121a] border border-[#222b3c] focus:border-[#f97316] rounded-xl px-4 py-2.5 text-sm text-gray-100 outline-none placeholder:text-gray-600 transition-all duration-250"
-            />
-          </div>
+          )}
+
+          {/* Password Field (only shown in signin and register) */}
+          {activeTab !== 'recovery' && (
+            <div>
+              <div className="flex justify-between items-center mb-1.5">
+                <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                  Password (पासवर्ड)
+                </label>
+                {activeTab === 'signin' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab('recovery');
+                      setError('');
+                      setSuccess('');
+                    }}
+                    className="text-xs text-[#f97316] hover:underline font-medium cursor-pointer"
+                  >
+                    Forgot password? (पासवर्ड भूल गए?)
+                  </button>
+                )}
+              </div>
+              <input
+                id="password-input"
+                type="password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+                className="w-full bg-[#0e121a] border border-[#222b3c] focus:border-[#f97316] rounded-xl px-4 py-2.5 text-sm text-gray-100 outline-none placeholder:text-gray-600 transition-all duration-250"
+              />
+            </div>
+          )}
 
           {/* Submit Button */}
           <button
@@ -349,8 +455,10 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
               'Sign In to Workspace'
             ) : activeTab === 'register' ? (
               'Create Account (खाता बनाएं)'
+            ) : recoveryType === 'staff' ? (
+              'Send Recovery Request to Main Admin'
             ) : (
-              'Reset Password (पासवर्ड बदलें)'
+              'Recover Password on Whatsapp & Email'
             )}
           </button>
         </form>
@@ -362,7 +470,9 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
               ? 'अपना स्वयं का पासवर्ड और खाता सेट करने के लिए ऊपर Register बटन दबाएं।' 
               : activeTab === 'register'
                 ? 'Already have an account? Press Sign In above.'
-                : 'मास्टर रिकवरी कोड का उपयोग करके एडमिन का भी नया पासवर्ड सेट किया जा सकता है।'}
+                : recoveryType === 'staff'
+                  ? 'अपना पासवर्ड भूल जाने पर, यहाँ से पासवर्ड रीसेट का अनुरोध सीधे मुख्य एडमिन को भेजें।'
+                  : 'यदि मुख्य एडमिन पासवर्ड भूल जाएं, तो पंजीकृत नाम और ईमेल भरकर व्हाट्सएप और ईमेल पर पुनः प्राप्त कर सकते हैं।'}
           </p>
         </div>
       </div>

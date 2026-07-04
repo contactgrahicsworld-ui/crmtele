@@ -1,6 +1,6 @@
 {
-  "name": "Tele-CRM",
-  "description": "Zero-Cost Operational CRM & Dialer Console with Lead Management, Call Recording, and Interactive Analytics.",
+  "name": "HubSphere",
+  "description": "Your Team. Your Clients. One Sphere. Zero-Cost Operational CRM & Dialer Console.",
   "requestFramePermissions": ["microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

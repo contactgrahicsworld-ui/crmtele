@@ -2,12 +2,19 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Phone, LogOut, CheckCircle, XCircle, Clock, Plus, 
   Search, Mic, MicOff, Volume2, Sparkles, Loader2, Play, AlertCircle, Trash2,
-  MessageSquare, Send, ExternalLink
+  MessageSquare, Send, ExternalLink, Calendar
 } from 'lucide-react';
 import { Lead, CallLog, AutoCallingConfig, SupportTicket } from '../types';
 
 interface TelecallerDashboardProps {
-  user: { id: string; name: string; email: string; role: 'admin' | 'telecaller' };
+  user: { 
+    id: string; 
+    name: string; 
+    email: string; 
+    role: 'admin' | 'head' | 'staff' | 'telecaller';
+    department?: 'Tech' | 'NonTech' | 'Sales';
+    phone?: string;
+  };
   onLogout: () => void;
 }
 
@@ -77,6 +84,8 @@ export default function TelecallerDashboard({ user, onLogout }: TelecallerDashbo
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const [recordingBase64, setRecordingBase64] = useState<string | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingError, setRecordingError] = useState<string | null>(null);
 
   // Ringing Synthesizer Audio Refs
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -84,6 +93,179 @@ export default function TelecallerDashboard({ user, onLogout }: TelecallerDashbo
   const ringIntervalRef = useRef<any>(null);
 
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+
+  // Telecaller HRM states
+  const [myAttendanceLogs, setMyAttendanceLogs] = useState<any[]>([]);
+  const [myLeaveApplications, setMyLeaveApplications] = useState<any[]>([]);
+  const [myPayrollStats, setMyPayrollStats] = useState<any | null>(null);
+  const [companyHolidays, setCompanyHolidays] = useState<any[]>([]);
+  const [selectedHrmMonth, setSelectedHrmMonth] = useState<string>(new Date().toISOString().slice(0, 7));
+  const [leaveStartDate, setLeaveStartDate] = useState<string>('');
+  const [leaveEndDate, setLeaveEndDate] = useState<string>('');
+  const [leaveReason, setLeaveReason] = useState<string>('');
+  const [isSubmittingLeave, setIsSubmittingLeave] = useState<boolean>(false);
+  const [showMySlipModal, setShowMySlipModal] = useState<boolean>(false);
+
+  // Leave Query States
+  const [queryModalLeaveId, setQueryModalLeaveId] = useState<string | null>(null);
+  const [queryModalText, setQueryModalText] = useState<string>('');
+
+  // Tasks States
+  const [myTasks, setMyTasks] = useState<any[]>([]);
+  const [taskRemark, setTaskRemark] = useState('');
+  const [selectedTaskForSubmit, setSelectedTaskForSubmit] = useState<any | null>(null);
+  const [taskAppealText, setTaskAppealText] = useState('');
+  const [selectedTaskForAppeal, setSelectedTaskForAppeal] = useState<any | null>(null);
+
+  // Load HRM Data
+  useEffect(() => {
+    const fetchHrmData = async () => {
+      try {
+        const [attRes, leaveRes, payRes, holidayRes, tasksRes] = await Promise.all([
+          fetch(`/api/attendance?userId=${user.id}`),
+          fetch(`/api/leaves?userId=${user.id}`),
+          fetch(`/api/payroll/report?month=${selectedHrmMonth}`),
+          fetch('/api/company-holidays'),
+          fetch(`/api/tasks?assignedTo=${user.id}`)
+        ]);
+
+        if (attRes.ok) {
+          const logs = await attRes.json();
+          setMyAttendanceLogs(logs.filter((a: any) => a.userId === user.id));
+        }
+        if (leaveRes.ok) {
+          const leaves = await leaveRes.json();
+          setMyLeaveApplications(leaves.filter((l: any) => l.userId === user.id));
+        }
+        if (holidayRes.ok) {
+          const hols = await holidayRes.json();
+          setCompanyHolidays(hols);
+        }
+        if (payRes.ok) {
+          const payData = await payRes.json();
+          const reportList = payData.report || (Array.isArray(payData) ? payData : []);
+          const myRecord = reportList.find((p: any) => p.userId === user.id);
+          setMyPayrollStats(myRecord || null);
+        }
+        if (tasksRes.ok) {
+          const tasks = await tasksRes.json();
+          setMyTasks(tasks);
+        }
+      } catch (err) {
+        console.error('Failed to load HRM statistics', err);
+      }
+    };
+    fetchHrmData();
+  }, [refreshTrigger, selectedHrmMonth, user.id]);
+
+  const handleTaskSubmit = async (taskId: string, remarkText: string) => {
+    if (!remarkText) {
+      showNotification("कृपया रिमार्क दर्ज करें!", "error");
+      return;
+    }
+    try {
+      const res = await fetch("/api/tasks/submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ taskId, status: "Completed", remark: remarkText })
+      });
+      if (res.ok) {
+        showNotification("कार्य सफलतापूर्वक जमा किया गया (Task submitted!)", "success");
+        setTaskRemark("");
+        setSelectedTaskForSubmit(null);
+        setRefreshTrigger(prev => prev + 1);
+      } else {
+        const d = await res.json();
+        showNotification(d.error || "जमा करने में असमर्थ", "error");
+      }
+    } catch (err) {
+      showNotification("सर्वर से कनेक्ट करने में विफल", "error");
+    }
+  };
+
+  const handleTaskAppeal = async (taskId: string, appealText: string) => {
+    if (!appealText) {
+      showNotification("कृपया अपना सवाल/अपील दर्ज करें!", "error");
+      return;
+    }
+    try {
+      const res = await fetch("/api/tasks/appeal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ taskId, appeal: appealText })
+      });
+      if (res.ok) {
+        showNotification("अपील / सवाल सफलतापूर्वक प्रबंधक को भेजा गया (Appeal sent!)", "success");
+        setTaskAppealText("");
+        setSelectedTaskForAppeal(null);
+        setRefreshTrigger(prev => prev + 1);
+      } else {
+        const d = await res.json();
+        showNotification(d.error || "अपील भेजने में असमर्थ", "error");
+      }
+    } catch (err) {
+      showNotification("सर्वर से कनेक्ट करने में विफल", "error");
+    }
+  };
+
+  const handleRaiseQuery = async (leaveId: string, queryText: string) => {
+    try {
+      const res = await fetch('/api/leaves/query', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ leaveId, queryText, userId: user.id }),
+      });
+
+      const data = await res.json();
+      if (res.ok && data.success) {
+        showNotification("सवाल सफलतापूर्वक दर्ज हो गया है!", "success");
+        setRefreshTrigger(prev => prev + 1);
+      } else {
+        showNotification(data.error || "सवाल दर्ज करने में विफलता", "error");
+      }
+    } catch (err) {
+      showNotification("सर्वर कनेक्शन एरर", "error");
+    }
+  };
+
+  const handleApplyLeave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!leaveStartDate || !leaveEndDate || !leaveReason) {
+      showNotification('Please fill all leave fields (सभी फील्ड भरें)', 'error');
+      return;
+    }
+    setIsSubmittingLeave(true);
+    try {
+      const res = await fetch('/api/leaves/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: user.id,
+          userName: user.name,
+          role: user.role,
+          startDate: leaveStartDate,
+          endDate: leaveEndDate,
+          reason: leaveReason
+        })
+      });
+      if (res.ok) {
+        showNotification('Leave application submitted successfully! (छुट्टी की अर्ज़ी भेज दी गई है)');
+        setLeaveStartDate('');
+        setLeaveEndDate('');
+        setLeaveReason('');
+        setRefreshTrigger(prev => prev + 1);
+      } else {
+        const err = await res.json();
+        showNotification(err.error || 'Failed to apply leave', 'error');
+      }
+    } catch (err) {
+      showNotification('Server communication failure', 'error');
+    } finally {
+      setIsSubmittingLeave(false);
+    }
+  };
 
   // Sync Timer for active call
   useEffect(() => {
@@ -238,6 +420,8 @@ export default function TelecallerDashboard({ user, onLogout }: TelecallerDashbo
     setCallNotes('');
     setCallOutcome('Interested');
     setRecordingBase64(null);
+    setRecordingError(null);
+    setIsRecording(false);
 
     // Cancel any active Auto-Calling timer
     setAutoCallCountdown(null);
@@ -253,21 +437,63 @@ export default function TelecallerDashboard({ user, onLogout }: TelecallerDashbo
       console.warn('Device calling protocol error', err);
     }
 
+    // Check if browser context supports media devices
+    if (typeof window !== 'undefined') {
+      const isSecure = window.location.protocol === 'https:' || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+      
+      if (!isSecure) {
+        const errMsg = "Insecure Connection (गैर-सुरक्षित HTTP): Microphone access requires a secure HTTPS connection. Please check your URL bar or server SSL configuration. (माइक्रोफोन रिकॉर्डिंग के लिए HTTPS आवश्यक है)";
+        setRecordingError(errMsg);
+        console.warn(errMsg);
+        return;
+      }
+
+      if (typeof MediaRecorder === 'undefined') {
+        const errMsg = "Browser Unsupported: MediaRecorder is not supported by your current browser. (इस ब्राउज़र में कॉल रिकॉर्डिंग समर्थित नहीं है)";
+        setRecordingError(errMsg);
+        console.warn(errMsg);
+        return;
+      }
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        const errMsg = "Media Devices Blocked: Your browser has disabled audio media devices. If you are inside an iframe preview, please click 'Open in new tab' at the top-right! (आईफ्रेम में माइक्रोफोन ब्लॉक हो सकता है, कृपया नए टैब में खोलें)";
+        setRecordingError(errMsg);
+        console.warn(errMsg);
+        return;
+      }
+    }
+
     // Capture standard local browser microphone recording to log in the CRM if user accepts
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+      let options = {};
+      if (typeof MediaRecorder.isTypeSupported === 'function') {
+        if (MediaRecorder.isTypeSupported('audio/webm')) {
+          options = { mimeType: 'audio/webm' };
+        } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+          options = { mimeType: 'audio/mp4' };
+        } else if (MediaRecorder.isTypeSupported('audio/ogg')) {
+          options = { mimeType: 'audio/ogg' };
+        }
+      }
+      
+      const recorder = new MediaRecorder(stream, options);
       mediaRecorderRef.current = recorder;
       audioChunksRef.current = [];
 
       recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
+        if (e.data && e.data.size > 0) {
           audioChunksRef.current.push(e.data);
         }
       };
 
       recorder.onstop = async () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        setIsRecording(false);
+        if (audioChunksRef.current.length === 0) {
+          console.warn("No audio data captured during call.");
+          return;
+        }
+        const audioBlob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
         
         // Convert to Base64 to upload and archive call recording
         const reader = new FileReader();
@@ -279,8 +505,21 @@ export default function TelecallerDashboard({ user, onLogout }: TelecallerDashbo
       };
 
       recorder.start();
-    } catch (err) {
-      console.warn('Microphone recording not allowed by browser. Logging call details manually.', err);
+      setIsRecording(true);
+    } catch (err: any) {
+      setIsRecording(false);
+      let errorFriendlyMsg = "Microphone failed to start. (माइक्रोफोन प्रारंभ नहीं हो सका)";
+      
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        errorFriendlyMsg = "Permission Denied: Microphone permission blocked. Please check your browser's URL bar security icon to allow microphone. (माइक्रोफोन परमिशन ब्लॉक की गई है)";
+      } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+        errorFriendlyMsg = "No Input Device: No active microphone found on your system. Please plug in a microphone or headset. (कोई माइक्रोफोन नहीं मिला)";
+      } else {
+        errorFriendlyMsg = `Microphone Error: ${err.message || err}`;
+      }
+      
+      setRecordingError(errorFriendlyMsg);
+      console.warn('Microphone recording error. Logging details manually.', err);
     }
   };
 
@@ -288,6 +527,7 @@ export default function TelecallerDashboard({ user, onLogout }: TelecallerDashbo
   const handleEndCall = () => {
     stopRingingSound();
     setCallState('ended');
+    setIsRecording(false);
 
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       try {
@@ -483,7 +723,7 @@ export default function TelecallerDashboard({ user, onLogout }: TelecallerDashbo
               Tele-CRM <span className="text-[#f97316]">Dialer Portal</span>
             </h1>
             <p className="text-xs text-gray-400">
-              Welcome, <span className="text-gray-300 font-bold">{user.name}</span> (ID: {user.id})
+              Welcome, <span className="text-[#f97316] font-bold">{user.name}</span> (<span className="text-gray-300 font-semibold">{user.email}</span>) | Role: <span className="text-gray-300 capitalize">{user.role}</span> {user.department && `| Dept: ${user.department}`}
             </p>
           </div>
         </div>
@@ -821,6 +1061,455 @@ export default function TelecallerDashboard({ user, onLogout }: TelecallerDashbo
 
         </div>
 
+        {/* HRM & SELF-SERVICE PAYROLL PORTAL (एचआरएम एवं वेतन विभाग) */}
+        <div className="bg-[#111622] border border-[#1f2635] p-6 rounded-3xl space-y-6">
+          <div className="border-b border-[#1f2635] pb-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+            <div className="text-left">
+              <h3 className="text-lg font-black text-white flex items-center gap-2">
+                <Clock className="w-5 h-5 text-[#f97316]" /> 
+                HRM & Self-Service Payroll (एचआरएम एवं वेतन विभाग)
+              </h3>
+              <p className="text-xs text-gray-400 mt-1">
+                Apply for leaves, view active attendance calendar, and download verified salary slips.
+              </p>
+            </div>
+            
+            {/* Month filter */}
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold text-gray-500 uppercase">Select Payroll Month:</span>
+              <input 
+                type="month" 
+                value={selectedHrmMonth}
+                onChange={(e) => setSelectedHrmMonth(e.target.value)}
+                className="bg-[#0e121a] border border-[#222b3c] text-white text-xs rounded-xl px-3 py-1.5 focus:border-[#f97316] outline-none font-bold cursor-pointer"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            
+            {/* COLUMN 1: APPLY LEAVE (छुट्टी के लिए आवेदन) */}
+            <div className="space-y-4">
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-[#f97316]" />
+                <h4 className="text-xs font-extrabold text-white uppercase tracking-wider">Apply for Leave (छुट्टी का आवेदन)</h4>
+              </div>
+
+              <form onSubmit={handleApplyLeave} className="space-y-3 bg-[#0d1017] p-4 rounded-2xl border border-[#1f2635] text-left">
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[10px] text-gray-400 block mb-1 uppercase font-bold">Start Date</label>
+                    <input 
+                      type="date"
+                      required
+                      value={leaveStartDate}
+                      onChange={(e) => setLeaveStartDate(e.target.value)}
+                      className="w-full bg-[#111622] text-white border border-[#222b3c] rounded-xl px-3 py-1.5 text-xs focus:border-[#f97316] outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-gray-400 block mb-1 uppercase font-bold">End Date</label>
+                    <input 
+                      type="date"
+                      required
+                      value={leaveEndDate}
+                      onChange={(e) => setLeaveEndDate(e.target.value)}
+                      className="w-full bg-[#111622] text-white border border-[#222b3c] rounded-xl px-3 py-1.5 text-xs focus:border-[#f97316] outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-[10px] text-gray-400 block mb-1 uppercase font-bold">Reason for Leave (कारण)</label>
+                  <textarea 
+                    required
+                    value={leaveReason}
+                    onChange={(e) => setLeaveReason(e.target.value)}
+                    placeholder="e.g. Health issue or personal work details..."
+                    rows={2}
+                    className="w-full bg-[#111622] text-white border border-[#222b3c] rounded-xl px-3 py-2 text-xs focus:border-[#f97316] outline-none resize-none"
+                  />
+                </div>
+
+                <button 
+                  type="submit"
+                  disabled={isSubmittingLeave}
+                  className="w-full bg-[#f97316] hover:bg-orange-600 text-white font-extrabold text-xs py-2 rounded-xl transition flex justify-center items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  {isSubmittingLeave ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Submit Leave Request'}
+                </button>
+              </form>
+
+              {/* MY APPLICATIONS STATUS LIST */}
+              <div className="space-y-2">
+                <span className="text-[10px] text-gray-400 font-bold uppercase block tracking-wider text-left">Leave Applications Status:</span>
+                <div className="space-y-1.5 max-h-72 overflow-y-auto pr-1">
+                  {myLeaveApplications.map(lv => (
+                    <div key={lv.id} className="bg-white border border-gray-200 shadow-sm p-4 rounded-xl space-y-2.5 text-xs text-left">
+                      <div className="flex justify-between items-start gap-2">
+                        <div>
+                          <p className="font-black text-gray-900">{lv.startDate} to {lv.endDate}</p>
+                          <p className="text-[10px] text-gray-600 font-semibold mt-0.5" title={lv.reason}>Reason: {lv.reason}</p>
+                        </div>
+                        <span className={`px-2.5 py-0.5 rounded-full text-[9px] font-extrabold uppercase border ${
+                          lv.status?.toLowerCase() === 'approved' ? 'bg-emerald-100 text-emerald-800 border-emerald-200' :
+                          lv.status?.toLowerCase() === 'rejected' ? 'bg-red-100 text-red-800 border-red-200' :
+                          lv.status?.toLowerCase() === 'queried' ? 'bg-purple-100 text-purple-800 border-purple-200' :
+                          'bg-yellow-100 text-yellow-800 border-yellow-200'
+                        }`}>
+                          {lv.status === 'Queried' ? 'Queried 💬' : lv.status}
+                        </span>
+                      </div>
+
+                      {/* Show rejection reason if present */}
+                      {lv.rejectionReason && (
+                        <div className="bg-red-50 border border-red-100 p-2.5 rounded-lg text-[10px] text-red-900 leading-relaxed font-semibold">
+                          <span className="text-red-700 font-extrabold">अस्वीकृति का कारण: </span>
+                          {lv.rejectionReason}
+                        </div>
+                      )}
+
+                      {/* Show employee query if present */}
+                      {lv.query && (
+                        <div className="bg-purple-50 border border-purple-100 p-2.5 rounded-lg text-[10px] text-purple-900 leading-relaxed font-semibold">
+                          <span className="text-purple-700 font-extrabold">आपका सवाल: </span>
+                          {lv.query}
+                        </div>
+                      )}
+
+                      {/* Show admin reply if present */}
+                      {lv.queryResponse && (
+                        <div className="bg-emerald-50 border border-emerald-100 p-2.5 rounded-lg text-[10px] text-emerald-900 leading-relaxed font-semibold">
+                          <span className="text-emerald-700 font-extrabold">एडमिन का जवाब: </span>
+                          {lv.queryResponse}
+                        </div>
+                      )}
+
+                      {/* Raise question button if status is Rejected or Queried */}
+                      {(lv.status?.toLowerCase() === 'rejected' || lv.status?.toLowerCase() === 'queried') && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setQueryModalLeaveId(lv.id);
+                            setQueryModalText(lv.query || '');
+                          }}
+                          className="w-full bg-[#f97316] hover:bg-orange-600 text-white font-extrabold text-xs py-2 rounded-xl transition text-center cursor-pointer"
+                        >
+                          {lv.query ? '✏️ Edit Question / Appeal (सवाल बदलें)' : '❓ Raise Question / Appeal (सवाल उठाएं)'}
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  {myLeaveApplications.length === 0 && (
+                    <p className="text-xs text-gray-500 italic py-2 text-center">No leave applications found.</p>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* COLUMN 2: ATTENDANCE OVERVIEW (हाजिरी रिपोर्ट) */}
+            <div className="space-y-4">
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                <h4 className="text-xs font-extrabold text-white uppercase tracking-wider">Attendance Breakdown ({selectedHrmMonth})</h4>
+              </div>
+
+              {myPayrollStats ? (
+                <div className="grid grid-cols-7 gap-1 bg-[#0d1017] p-3 rounded-2xl border border-[#1f2635] text-center text-[10px]">
+                  {myPayrollStats.detailDays && myPayrollStats.detailDays.map((day: any) => {
+                    let bg = "bg-[#1f2635]/20 text-gray-500";
+                    if (day.type === "Present") bg = "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30";
+                    if (day.type === "Leave") bg = "bg-yellow-500/20 text-yellow-400 border border-yellow-500/30";
+                    if (day.type === "Absent") bg = "bg-red-500/20 text-red-400 border border-red-500/30";
+                    if (day.type === "Sunday-Paid") bg = "bg-blue-500/20 text-blue-400 border border-blue-500/30";
+                    if (day.type === "Sunday-Deducted") bg = "bg-orange-500/20 text-orange-400 border border-orange-500/30";
+
+                    return (
+                      <div key={day.day} className={`p-1 rounded flex flex-col justify-between h-9 ${bg}`} title={day.label}>
+                        <span className="font-bold">{day.day}</span>
+                        <span className="text-[7px] truncate font-semibold uppercase">{day.type.split("-")[0]}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="bg-[#0d1017] p-8 text-center rounded-2xl border border-[#1f2635] text-xs text-gray-500 italic">
+                  Attendance matrix pending for this billing month.
+                </div>
+              )}
+
+              {/* Attendance metrics brief count */}
+              {myPayrollStats && (
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  <div className="bg-[#0e121a] p-2 rounded-xl border border-[#1f2635]">
+                    <span className="text-[9px] text-gray-400 block uppercase font-bold">Present</span>
+                    <span className="text-sm font-extrabold text-emerald-400">{myPayrollStats.presentDays} Days</span>
+                  </div>
+                  <div className="bg-[#0e121a] p-2 rounded-xl border border-[#1f2635]">
+                    <span className="text-[9px] text-gray-400 block uppercase font-bold">Leaves</span>
+                    <span className="text-sm font-extrabold text-yellow-400">{myPayrollStats.leaveDays} Days</span>
+                  </div>
+                  <div className="bg-[#0e121a] p-2 rounded-xl border border-[#1f2635]">
+                    <span className="text-[9px] text-gray-400 block uppercase font-bold">Sunday Ded</span>
+                    <span className="text-sm font-extrabold text-orange-400">{myPayrollStats.sundayDeductedCount || 0} Days</span>
+                  </div>
+                </div>
+              )}
+
+              {/* COMPANY HOLIDAYS */}
+              <div className="pt-4 border-t border-[#1f2635] space-y-3">
+                <div className="flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-[#f97316]" />
+                  <span className="text-xs font-extrabold text-white uppercase tracking-wider">Company Holidays (सार्वजनिक अवकाश)</span>
+                </div>
+                <div className="space-y-1.5 max-h-40 overflow-y-auto bg-[#0d1017] p-3.5 rounded-2xl border border-[#1f2635]">
+                  {companyHolidays && companyHolidays.map(hol => (
+                    <div key={hol.id} className="flex justify-between items-center text-xs text-gray-300 py-1.5 border-b border-[#1f2635]/50 last:border-0">
+                      <div className="text-left">
+                        <span className="font-extrabold text-white block">{hol.reason}</span>
+                        <span className="text-[10px] text-gray-500 font-mono">{hol.date}</span>
+                      </div>
+                      <span className="text-[10px] text-emerald-400 font-extrabold bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded">Paid Holiday</span>
+                    </div>
+                  ))}
+                  {(!companyHolidays || companyHolidays.length === 0) && (
+                    <p className="text-[10px] text-gray-500 italic text-center py-2">No company holidays listed yet.</p>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* COLUMN 3: PAYROLL & SALARY SLIPS (वेतन विवरण) */}
+            <div className="space-y-4 text-left">
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-[#f97316]" />
+                <h4 className="text-xs font-extrabold text-white uppercase tracking-wider">Payroll & Salary Slips (वेतन विवरण)</h4>
+              </div>
+
+              {myPayrollStats ? (
+                <div className="bg-[#0d1017] p-5 rounded-2xl border border-[#1f2635] space-y-4">
+                  <div className="flex justify-between items-start border-b border-[#1f2635] pb-3">
+                    <div>
+                      <p className="text-xs text-gray-400">Total Net Salary (कुल देय वेतन)</p>
+                      <span className="text-2xl font-black text-[#f97316] block mt-1">₹{myPayrollStats.finalSalary.toLocaleString()}</span>
+                    </div>
+                    <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[9px] font-extrabold px-2 py-0.5 rounded uppercase">
+                      AUDITED
+                    </span>
+                  </div>
+
+                  <div className="space-y-2 text-xs">
+                    <div className="flex justify-between text-gray-400">
+                      <span>Base monthly salary:</span>
+                      <strong className="text-white">₹{myPayrollStats.salaryBase.toLocaleString()}</strong>
+                    </div>
+                    <div className="flex justify-between text-gray-400">
+                      <span>Deductions:</span>
+                      <strong className="text-red-400">-₹{myPayrollStats.totalDeductions.toLocaleString()}</strong>
+                    </div>
+                    <div className="flex justify-between text-gray-400">
+                      <span>Incentive Earned:</span>
+                      <strong className="text-emerald-400">+₹{myPayrollStats.incentiveAmount.toLocaleString()}</strong>
+                    </div>
+                    <div className="flex justify-between text-gray-400 border-t border-[#1f2635] pt-2">
+                      <span>Conversion achievement:</span>
+                      <strong className="text-orange-400">{myPayrollStats.performancePct}% ({myPayrollStats.salesDoneCount} sales)</strong>
+                    </div>
+                  </div>
+
+                  <button 
+                    type="button"
+                    onClick={() => setShowMySlipModal(true)}
+                    className="w-full bg-[#1e2637] hover:bg-[#28324a] text-white font-extrabold text-xs py-2.5 rounded-xl transition cursor-pointer text-center block mt-2 border border-[#2d3953]"
+                  >
+                    🔍 View Detailed Salary Slip
+                  </button>
+                </div>
+              ) : (
+                <div className="bg-[#0d1017] p-8 text-center rounded-2xl border border-[#1f2635] text-xs text-gray-500 italic">
+                  Payroll and salary calculations have not been verified by administration yet. Please check in with the main admin.
+                </div>
+              )}
+            </div>
+
+          </div>
+        </div>
+
+        {/* ========================================== */}
+        {/* WORK, TASKS & SUPERVISOR COMMUNICATION SECTION */}
+        {/* ========================================== */}
+        <div className="bg-[#111622] border border-[#1f2635] p-6 rounded-3xl space-y-6">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-[#1e2635] pb-4">
+            <div>
+              <h3 className="text-lg font-black text-white flex items-center gap-2">
+                📋 My Assigned Work & Progress (मेरा काम और प्रगति)
+              </h3>
+              <p className="text-xs text-gray-400 mt-1">
+                View instructions assigned by your department head / sub-admin, submit completions, or raise appeals.
+              </p>
+            </div>
+            
+            {/* Direct WhatsApp / Call Supervisor Support */}
+            <div className="flex items-center gap-3 flex-wrap">
+              <span className="text-xs text-gray-400 font-bold">Contact supervisor:</span>
+              <a 
+                href="https://wa.me/919876543210" 
+                target="_blank" 
+                referrerPolicy="no-referrer"
+                className="bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-[11px] px-3.5 py-2 rounded-xl transition flex items-center gap-1.5"
+              >
+                <MessageSquare className="w-3.5 h-3.5" /> WhatsApp Head
+              </a>
+              <a 
+                href="tel:+919876543210" 
+                className="bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-[11px] px-3.5 py-2 rounded-xl transition flex items-center gap-1.5"
+              >
+                <Phone className="w-3.5 h-3.5" /> Call Head
+              </a>
+            </div>
+          </div>
+
+          {/* Tasks List */}
+          {myTasks.length === 0 ? (
+            <div className="text-center py-8 bg-[#0d1017] rounded-2xl border border-[#1f2635]">
+              <p className="text-sm text-gray-500 font-medium">No tasks assigned to you yet. (अभी कोई काम आवंटित नहीं हुआ है)</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {myTasks.map((task: any) => (
+                <div key={task.id} className="bg-[#0e121a] border border-[#1e2635] p-5 rounded-2xl space-y-3">
+                  <div className="flex justify-between items-start gap-2">
+                    <div>
+                      <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block">TASK TITLE</span>
+                      <h4 className="font-bold text-white text-sm">{task.title}</h4>
+                    </div>
+                    <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase ${
+                      task.status === 'Approved' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30' :
+                      task.status === 'Denied' ? 'bg-red-500/10 text-red-400 border border-red-500/30' :
+                      task.status === 'Submitted' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/30' :
+                      task.status === 'Appealed' ? 'bg-purple-500/10 text-purple-400 border border-purple-500/30' :
+                      'bg-yellow-500/10 text-yellow-500 border border-yellow-500/30'
+                    }`}>
+                      {task.status}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 text-[11px] text-gray-400">
+                    <div>
+                      <span className="text-gray-500">Assigned By:</span> {task.assignedByName || "Head/Admin"}
+                    </div>
+                    <div>
+                      <span className="text-gray-500">Target Date:</span> {task.date}
+                    </div>
+                  </div>
+
+                  {task.remark && (
+                    <div className="p-3 bg-[#111622] rounded-xl border border-[#1f2635] text-xs space-y-1">
+                      <span className="text-[9px] font-bold text-gray-500 block uppercase">YOUR SUBMISSION REMARK</span>
+                      <p className="text-gray-300 italic">"{task.remark}"</p>
+                    </div>
+                  )}
+
+                  {task.adminReply && (
+                    <div className="p-3 bg-orange-500/5 rounded-xl border border-orange-500/20 text-xs space-y-1">
+                      <span className="text-[9px] font-bold text-orange-400 block uppercase">SUPERVISOR FEEDBACK</span>
+                      <p className="text-gray-300 italic">"{task.adminReply}"</p>
+                    </div>
+                  )}
+
+                  {task.appeal && (
+                    <div className="p-3 bg-purple-500/5 rounded-xl border border-purple-500/20 text-xs space-y-1">
+                      <span className="text-[9px] font-bold text-purple-400 block uppercase">YOUR APPEAL/QUESTION</span>
+                      <p className="text-gray-300 italic">"{task.appeal}"</p>
+                      {task.appealReply && (
+                        <div className="mt-2 pt-2 border-t border-purple-500/10">
+                          <span className="text-[9px] font-bold text-emerald-400 block uppercase">SUPERVISOR ANSWER</span>
+                          <p className="text-gray-300 italic">"{task.appealReply}"</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Actions based on status */}
+                  {task.status === 'Pending' && (
+                    <div className="pt-2">
+                      {selectedTaskForSubmit?.id === task.id ? (
+                        <div className="space-y-2">
+                          <textarea
+                            value={taskRemark}
+                            onChange={(e) => setTaskRemark(e.target.value)}
+                            placeholder="Enter your completion proof or work update remark..."
+                            className="w-full bg-[#0d1017] border border-[#222b3c] focus:border-[#f97316] rounded-xl p-2.5 text-xs text-white outline-none"
+                            rows={3}
+                          />
+                          <div className="flex gap-2 justify-end">
+                            <button
+                              onClick={() => setSelectedTaskForSubmit(null)}
+                              className="px-3 py-1.5 bg-gray-800 text-gray-300 hover:text-white rounded-lg text-xs font-bold transition"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              onClick={() => handleTaskSubmit(task.id, taskRemark)}
+                              className="px-4 py-1.5 bg-[#f97316] hover:bg-orange-600 text-white rounded-lg text-xs font-black transition"
+                            >
+                              Submit Task Proof
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => setSelectedTaskForSubmit(task)}
+                          className="w-full py-2 bg-[#f97316]/10 hover:bg-[#f97316]/20 border border-[#f97316]/30 text-[#f97316] hover:text-white text-xs font-black rounded-xl transition"
+                        >
+                          Submit Work Completion
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {(task.status === 'Denied' || task.status === 'Approved') && !task.appeal && (
+                    <div className="pt-2">
+                      {selectedTaskForAppeal?.id === task.id ? (
+                        <div className="space-y-2">
+                          <textarea
+                            value={taskAppealText}
+                            onChange={(e) => setTaskAppealText(e.target.value)}
+                            placeholder="Type your question or explanation appeal to the supervisor..."
+                            className="w-full bg-[#0d1017] border border-[#222b3c] focus:border-[#f97316] rounded-xl p-2.5 text-xs text-white outline-none"
+                            rows={3}
+                          />
+                          <div className="flex gap-2 justify-end">
+                            <button
+                              onClick={() => setSelectedTaskForAppeal(null)}
+                              className="px-3 py-1.5 bg-gray-800 text-gray-300 hover:text-white rounded-lg text-xs font-bold transition"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              onClick={() => handleTaskAppeal(task.id, taskAppealText)}
+                              className="px-4 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-xs font-black transition"
+                            >
+                              Submit Appeal
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => setSelectedTaskForAppeal(task)}
+                          className="w-full py-2 bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/30 text-purple-400 hover:text-white text-xs font-bold rounded-xl transition"
+                        >
+                          Raise Query / Appeal
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
       </div>
 
       {/* MODAL 1: ADD CUSTOMER DIALOG (TELECALLER CLIENT INSERT) */}
@@ -973,15 +1662,31 @@ export default function TelecallerDashboard({ user, onLogout }: TelecallerDashbo
                 )}
 
                 {/* Local microphone visualizers */}
-                <div className="flex items-center gap-4 pt-2">
-                  <div className="flex items-center gap-1.5">
-                    <div className={`w-2.5 h-2.5 rounded-full ${callState === 'connected' ? 'bg-emerald-500 animate-pulse' : 'bg-gray-600'}`}></div>
-                    <span className="text-[10px] text-gray-500 font-bold uppercase">Timer Active</span>
+                <div className="flex flex-col gap-2 pt-2">
+                  <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-1.5">
+                      <div className={`w-2.5 h-2.5 rounded-full ${callState === 'connected' ? 'bg-emerald-500 animate-pulse' : 'bg-gray-600'}`}></div>
+                      <span className="text-[10px] text-gray-500 font-bold uppercase">Timer Active</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <div className={`w-2.5 h-2.5 rounded-full ${isRecording ? 'bg-red-500 animate-pulse' : 'bg-gray-600'}`}></div>
+                      <span className="text-[10px] text-gray-500 font-bold uppercase">
+                        {isRecording ? 'Recording Live' : 'Recording Inactive'}
+                      </span>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-1.5">
-                    <div className={`w-2.5 h-2.5 rounded-full ${mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording' ? 'bg-red-500 animate-ping' : 'bg-gray-600'}`}></div>
-                    <span className="text-[10px] text-gray-500 font-bold uppercase">Local Voice Rec</span>
-                  </div>
+
+                  {recordingError && (
+                    <div className="mt-2 p-3 bg-red-950/40 border border-red-500/20 rounded-xl text-[11px] text-red-200 space-y-1 text-left">
+                      <p className="font-bold flex items-center gap-1 text-red-400">
+                        ⚠️ Microphone Alert (रिकॉर्डिंग अलर्ट):
+                      </p>
+                      <p className="leading-relaxed">{recordingError}</p>
+                      <p className="text-gray-400 text-[10px] leading-snug">
+                        Note: Virtual calls route through your local device protocol. If running in an iframe preview, click "Open in new tab" at the top-right to authorize secure media capture.
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1146,6 +1851,197 @@ export default function TelecallerDashboard({ user, onLogout }: TelecallerDashbo
 
             </div>
 
+          </div>
+        </div>
+      )}
+
+      {/* RAISE LEAVE QUESTION / APPEAL MODAL OVERLAY */}
+      {queryModalLeaveId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="bg-[#111622] border border-[#1f2635] rounded-3xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col p-6 space-y-4">
+            <div className="text-left">
+              <h3 className="text-base font-black text-white">Raise Question / Appeal (सवाल या प्रश्न उठाएं)</h3>
+              <p className="text-xs text-gray-400 mt-1">If your leave was rejected and you want to raise a query or appeal to the administration, type your message below.</p>
+            </div>
+
+            <textarea
+              required
+              value={queryModalText}
+              onChange={(e) => setQueryModalText(e.target.value)}
+              placeholder="Type your question or reason for query (e.g. Please approve this as it was an emergency)..."
+              className="w-full bg-[#0d1017] text-white border border-[#222b3c] rounded-xl px-3 py-2 text-xs focus:border-[#f97316] outline-none h-28 resize-none"
+            />
+
+            <div className="flex gap-2 justify-end">
+              <button
+                type="button"
+                onClick={() => {
+                  setQueryModalLeaveId(null);
+                  setQueryModalText('');
+                }}
+                className="px-4 py-2 text-xs font-bold text-white bg-red-600 hover:bg-red-700 rounded-xl cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!queryModalText.trim()) {
+                    showNotification("कृपया सवाल या कारण लिखें", "error");
+                    return;
+                  }
+                  handleRaiseQuery(queryModalLeaveId, queryModalText);
+                  setQueryModalLeaveId(null);
+                  setQueryModalText('');
+                }}
+                className="px-4 py-2 text-xs font-bold text-white bg-[#f97316] hover:bg-orange-600 rounded-xl cursor-pointer"
+              >
+                Submit Appeal (सवाल भेजें)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* PERSONAL EMPLOYEE PAYSLIP MODAL OVERLAY */}
+      {showMySlipModal && myPayrollStats && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="bg-[#111622] border border-[#1f2635] rounded-3xl w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col">
+            {/* Header */}
+            <div className="p-6 border-b border-[#1f2635] bg-[#0d1017] flex justify-between items-center">
+              <div className="text-left">
+                <h3 className="text-lg font-black text-white">My Salary Slip (सैलरी स्लिप)</h3>
+                <p className="text-xs text-gray-400">Statement of Earnings and Deductions for {selectedHrmMonth}</p>
+              </div>
+              <button 
+                type="button"
+                onClick={() => setShowMySlipModal(false)}
+                className="text-gray-400 hover:text-white font-bold text-sm bg-[#1a202c] px-3 py-1.5 rounded-lg cursor-pointer"
+              >
+                Close ✕
+              </button>
+            </div>
+            {/* Slip Body */}
+            <div className="p-8 space-y-6 overflow-y-auto max-h-[70vh]">
+              {/* Corporate Header */}
+              <div className="border-b border-[#1f2635] pb-6 flex justify-between items-start">
+                <div className="text-left">
+                  <h2 className="text-2xl font-black text-[#f97316] tracking-tight">GRAHICS WORLD</h2>
+                  <p className="text-xs text-gray-400 mt-1">HRM & Payroll Operations Center</p>
+                </div>
+                <div className="text-right">
+                  <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-3 py-1 rounded-full text-xs font-semibold">
+                    PAID & AUDITED
+                  </span>
+                  <p className="text-[10px] text-gray-500 mt-2">Generated on {new Date().toLocaleDateString()}</p>
+                </div>
+              </div>
+
+              {/* Employee Info Block */}
+              <div className="grid grid-cols-2 gap-4 text-xs text-left">
+                <div>
+                  <p className="text-gray-500">Employee Name:</p>
+                  <p className="font-bold text-white text-sm">{user.name}</p>
+                </div>
+                <div>
+                  <p className="text-gray-500">Employee Role:</p>
+                  <p className="font-bold text-[#f97316] uppercase">{user.role}</p>
+                </div>
+                <div>
+                  <p className="text-gray-500">Email Address:</p>
+                  <p className="text-gray-300">{user.email}</p>
+                </div>
+                <div>
+                  <p className="text-gray-500">Monthly Target:</p>
+                  <p className="text-gray-300 font-bold">{myPayrollStats.monthlyTarget} Sales</p>
+                </div>
+              </div>
+
+              {/* Breakdown Table */}
+              <div className="border border-[#1f2635] rounded-xl overflow-hidden text-xs text-left">
+                <div className="grid grid-cols-2 bg-[#0d1017] border-b border-[#1f2635] p-3 font-bold text-gray-400">
+                  <div>Description</div>
+                  <div className="text-right">Amount (₹)</div>
+                </div>
+                
+                <div className="divide-y divide-[#1f2635]">
+                  <div className="grid grid-cols-2 p-3 text-gray-300">
+                    <div>Basic Base Salary (महीने की बेसिक सैलरी)</div>
+                    <div className="text-right">₹{myPayrollStats.salaryBase.toLocaleString()}</div>
+                  </div>
+                  
+                  <div className="grid grid-cols-2 p-3 text-gray-300">
+                    <div>
+                      Deductions (Approved Leaves + Absences + Sunday Deductions)
+                      <p className="text-[10px] text-gray-500 mt-0.5">
+                        {myPayrollStats.leaveDays} Leaves, {myPayrollStats.absentDays} Absences, {myPayrollStats.sundayDeductedCount} Sun Deductions
+                      </p>
+                    </div>
+                    <div className="text-right text-red-400">-₹{myPayrollStats.totalDeductions.toLocaleString()}</div>
+                  </div>
+
+                  <div className="grid grid-cols-2 p-3 text-gray-300 bg-[#161d2b]/30">
+                    <div className="font-semibold text-white">Net Basic Earned (दर्ज हाजिरी के हिसाब से बेसिक)</div>
+                    <div className="text-right font-semibold text-white">₹{myPayrollStats.finalBasicSalary.toLocaleString()}</div>
+                  </div>
+
+                  {user.role === 'telecaller' && (
+                    <div className="grid grid-cols-2 p-3 text-gray-300">
+                      <div>
+                        Incentive Earned (इंसेंटिव)
+                        <p className="text-[10px] text-gray-500 mt-0.5">
+                          Conversion Pct: {myPayrollStats.performancePct}% ({myPayrollStats.salesDoneCount} Sales) | Exceeded: +{myPayrollStats.incentivePct}%
+                        </p>
+                      </div>
+                      <div className="text-right text-emerald-400">+₹{myPayrollStats.incentiveAmount.toLocaleString()}</div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Total Payable */}
+              <div className="bg-orange-500/10 border border-orange-500/20 rounded-2xl p-4 flex justify-between items-center">
+                <div className="text-left">
+                  <p className="text-xs text-gray-400">Total Net Payable (कुल प्राप्त सैलरी)</p>
+                  <p className="text-[10px] text-gray-500 mt-0.5">Basic Earned + Performance Incentive</p>
+                </div>
+                <div className="text-right">
+                  <span className="text-2xl font-black text-[#f97316]">₹{myPayrollStats.finalSalary.toLocaleString()}</span>
+                </div>
+              </div>
+
+              {/* Attendance breakdown in slip */}
+              <div className="space-y-2 text-left">
+                <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider">Attendance Breakdown ({selectedHrmMonth})</h4>
+                <div className="grid grid-cols-7 gap-1 bg-[#0d1017] p-2 rounded-xl border border-[#1f2635] text-center text-[10px]">
+                  {myPayrollStats.detailDays && myPayrollStats.detailDays.map((day: any) => {
+                    let bg = "bg-[#1f2635]/20 text-gray-500";
+                    if (day.type === "Present") bg = "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30";
+                    if (day.type === "Leave") bg = "bg-yellow-500/20 text-yellow-400 border border-yellow-500/30";
+                    if (day.type === "Absent") bg = "bg-red-500/20 text-red-400 border border-red-500/30";
+                    if (day.type === "Sunday-Paid") bg = "bg-blue-500/20 text-blue-400 border border-blue-500/30";
+                    if (day.type === "Sunday-Deducted") bg = "bg-orange-500/20 text-orange-400 border border-orange-500/30";
+
+                    return (
+                      <div key={day.day} className={`p-1.5 rounded-md flex flex-col justify-between h-10 ${bg}`} title={day.label}>
+                        <span className="font-bold">{day.day}</span>
+                        <span className="text-[7px] truncate font-medium uppercase">{day.type.split("-")[0]}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="text-center pt-4">
+                <button 
+                  type="button"
+                  onClick={() => window.print()}
+                  className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold px-6 py-2.5 rounded-xl text-xs flex items-center gap-2 mx-auto cursor-pointer"
+                >
+                  Print Salary Slip
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
